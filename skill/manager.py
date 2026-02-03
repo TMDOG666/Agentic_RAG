@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Dict, Optional
  
 import yaml
+from skill.registry import SkillsRegistry
  
  
 class SkillManager:
@@ -40,6 +41,17 @@ class SkillManager:
     def __init__(self, skills_dir: str = ".cursor/skills"):
         self.skills_dir = Path(skills_dir)
         self.skills_metadata: Dict[str, dict] = {}
+ 
+        # SkillsRegistry：用于持久化缓存 skills 元数据（name/description + 变更检测字段）。
+        #
+        # 为什么要做 registry：
+        # - skills 数量多时，每次启动都解析所有 SKILL.md 会带来明显 I/O 与 YAML 解析开销。
+        # - registry 通过记录 SKILL.md 的 (mtime_ns, size) 来判断是否变更；未变更则直接复用缓存。
+        #
+        # 重要：
+        # - registry 只缓存元数据，不缓存 SKILL.md 正文（正文仍然按需加载）。
+        # - registry 不可用时会自动降级为全量解析，不影响主流程。
+        self.registry = SkillsRegistry(self.skills_dir)
  
         # 初始化时扫描技能目录，建立“技能名 -> 元数据”的索引。
         self._scan_skills()
@@ -64,6 +76,9 @@ class SkillManager:
             print("💡 将创建目录并添加示例 Skills")
             return
  
+        # 收集本次扫描实际存在且有效的 skill names，用于扫描结束后清理 registry。
+        discovered_names = set()
+ 
         # 每个子目录视为一个候选 skill。
         for skill_dir in self.skills_dir.iterdir():
             if not skill_dir.is_dir():
@@ -74,36 +89,70 @@ class SkillManager:
             if not skill_md.exists():
                 continue
  
-            # 从 front matter 解析出 metadata（name/description 等）。
-            metadata = self._parse_metadata(skill_md)
-            if not metadata or "name" not in metadata:
-                print(f"⚠️  跳过无效的 Skill: {skill_dir.name}")
+            # 变更检测：获取 SKILL.md 的 mtime_ns 与 size，用于 registry 命中。
+            # 说明：这里仅做 stat，不读取文件内容；这是“加速”的核心点。
+            try:
+                st = skill_md.stat()
+                mtime_ns = int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1_000_000_000)))
+                size = int(st.st_size)
+            except Exception as e:
+                print(f"⚠️  跳过无效的 Skill（无法读取 SKILL.md stat）: {skill_dir.name}: {e}")
                 continue
  
-            name = metadata.get("name")
-            description = metadata.get("description", "")
+            # 优先从 registry 读取缓存：
+            # - 若 SKILL.md 未变更，则无需解析 YAML frontmatter。
+            # - 若 registry 不可用或未命中，则回退到解析 SKILL.md。
+            cached_description = self.registry.get_description_if_fresh(skill_dir.name, mtime_ns, size)
+            if cached_description is not None:
+                # registry 命中后仍要做基本健壮性校验，避免脏缓存导致 prompt 注入异常。
+                if len(cached_description) > 1024:
+                    cached_description = None
  
-            if not isinstance(name, str) or not name.strip():
-                print(f"⚠️  跳过无效的 Skill（name 非法）: {skill_dir.name}")
-                continue
-            name = name.strip()
- 
-            if name != skill_dir.name:
-                print(f"⚠️  跳过无效的 Skill（name 与目录名不一致）: {skill_dir.name} (name={name})")
-                continue
- 
+            # name 以目录名为准，并做规范校验（AgentSkills spec）。
+            name = skill_dir.name
             if not (1 <= len(name) <= 64) or re.match(r"^[a-z0-9]+(?:-[a-z0-9]+)*$", name) is None:
                 print(f"⚠️  跳过无效的 Skill（name 格式不符合规范）: {skill_dir.name} (name={name})")
+                self.registry.delete_skill(name)
                 continue
  
-            if not isinstance(description, str) or not description.strip():
-                print(f"⚠️  跳过无效的 Skill（description 为空）: {skill_dir.name}")
-                continue
-            description = description.strip()
+            # description：优先使用缓存，否则解析 SKILL.md frontmatter。
+            if cached_description is not None:
+                description = cached_description.strip()
+            else:
+                # 从 front matter 解析出 metadata（name/description 等）。
+                metadata = self._parse_metadata(skill_md)
+                if not metadata or "name" not in metadata:
+                    print(f"⚠️  跳过无效的 Skill: {skill_dir.name}")
+                    self.registry.delete_skill(name)
+                    continue
  
-            if len(description) > 1024:
-                print(f"⚠️  跳过无效的 Skill（description 过长）: {skill_dir.name}")
-                continue
+                fm_name = metadata.get("name")
+                description = metadata.get("description", "")
+ 
+                if not isinstance(fm_name, str) or not fm_name.strip():
+                    print(f"⚠️  跳过无效的 Skill（name 非法）: {skill_dir.name}")
+                    self.registry.delete_skill(name)
+                    continue
+                fm_name = fm_name.strip()
+ 
+                if fm_name != name:
+                    print(f"⚠️  跳过无效的 Skill（name 与目录名不一致）: {skill_dir.name} (name={fm_name})")
+                    self.registry.delete_skill(name)
+                    continue
+ 
+                if not isinstance(description, str) or not description.strip():
+                    print(f"⚠️  跳过无效的 Skill（description 为空）: {skill_dir.name}")
+                    self.registry.delete_skill(name)
+                    continue
+                description = description.strip()
+ 
+                if len(description) > 1024:
+                    print(f"⚠️  跳过无效的 Skill（description 过长）: {skill_dir.name}")
+                    self.registry.delete_skill(name)
+                    continue
+ 
+                # 解析成功：回写 registry（下次启动若 SKILL.md 未变更即可直接命中）。
+                self.registry.upsert_skill(name, description, mtime_ns, size)
  
             if name in self.skills_metadata:
                 existing = self.skills_metadata[name]["path"]
@@ -115,13 +164,17 @@ class SkillManager:
                 "path": skill_dir,
                 "skill_file": skill_md,
             }
+            discovered_names.add(name)
+ 
+        # 清理 registry：删除 DB 中已不存在的 skill。
+        self.registry.cleanup_not_in(discovered_names)
  
     def _parse_metadata(self, skill_file: Path) -> Optional[dict]:
         """解析 SKILL.md 中的 YAML front matter。
  
         SKILL.md 约定格式：
  
-        ```
+        ```python
         ---
         name: xxx
         description: yyy
