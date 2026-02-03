@@ -17,6 +17,7 @@
  """
  
 import os
+import re
 import subprocess
 from pathlib import Path
 from typing import Dict, Optional
@@ -79,8 +80,38 @@ class SkillManager:
                 print(f"⚠️  跳过无效的 Skill: {skill_dir.name}")
                 continue
  
-            self.skills_metadata[metadata["name"]] = {
-                "description": metadata.get("description", ""),
+            name = metadata.get("name")
+            description = metadata.get("description", "")
+ 
+            if not isinstance(name, str) or not name.strip():
+                print(f"⚠️  跳过无效的 Skill（name 非法）: {skill_dir.name}")
+                continue
+            name = name.strip()
+ 
+            if name != skill_dir.name:
+                print(f"⚠️  跳过无效的 Skill（name 与目录名不一致）: {skill_dir.name} (name={name})")
+                continue
+ 
+            if not (1 <= len(name) <= 64) or re.match(r"^[a-z0-9]+(?:-[a-z0-9]+)*$", name) is None:
+                print(f"⚠️  跳过无效的 Skill（name 格式不符合规范）: {skill_dir.name} (name={name})")
+                continue
+ 
+            if not isinstance(description, str) or not description.strip():
+                print(f"⚠️  跳过无效的 Skill（description 为空）: {skill_dir.name}")
+                continue
+            description = description.strip()
+ 
+            if len(description) > 1024:
+                print(f"⚠️  跳过无效的 Skill（description 过长）: {skill_dir.name}")
+                continue
+ 
+            if name in self.skills_metadata:
+                existing = self.skills_metadata[name]["path"]
+                print(f"⚠️  跳过重复的 Skill name: {name} (已存在: {existing}, 新发现: {skill_dir})")
+                continue
+ 
+            self.skills_metadata[name] = {
+                "description": description,
                 "path": skill_dir,
                 "skill_file": skill_md,
             }
@@ -203,9 +234,26 @@ class SkillManager:
             return f"❌ 技能 '{skill_name}' 不存在"
  
         skill_dir = self.skills_metadata[skill_name]["path"]
-        file_path = skill_dir / filename
  
-        if not file_path.exists():
+        if not isinstance(filename, str) or not filename.strip():
+            return "❌ filename 不能为空"
+ 
+        requested = Path(filename)
+        if requested.is_absolute() or requested.drive:
+            return "❌ 不允许读取绝对路径"
+        if ".." in requested.parts:
+            return "❌ 不允许使用 '..' 路径"
+        if len(requested.parts) < 2 or requested.parts[0] not in {"references", "assets"}:
+            return "❌ 仅允许读取 references/ 或 assets/ 目录下的文件"
+ 
+        base_dir = skill_dir.resolve()
+        file_path = (skill_dir / requested).resolve()
+        try:
+            file_path.relative_to(base_dir)
+        except ValueError:
+            return "❌ 不允许读取技能目录之外的文件"
+ 
+        if not file_path.exists() or not file_path.is_file():
             return f"❌ 文件 '{filename}' 在技能 '{skill_name}' 中不存在"
  
         try:

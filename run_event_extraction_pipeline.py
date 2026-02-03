@@ -17,7 +17,7 @@ import argparse
 import json
 from pathlib import Path
  
-from app.event_extraction_pipeline import run_pipeline
+from app.event_extraction_pipeline import run_pipeline, run_pipeline_agentic
 
 
 def main():
@@ -40,6 +40,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True, help="Path to input .txt")
     parser.add_argument("--output", default="event_output.json", help="Path to output json")
+    parser.add_argument("--agentic", action="store_true", help="Use agentic pipeline (LLM decides the workflow)")
     args = parser.parse_args()
 
     # 读取输入文本：统一用 UTF-8。
@@ -50,7 +51,8 @@ def main():
     result = None
     error = None
     try:
-        result = run_pipeline(text)
+        pipeline_fn = run_pipeline_agentic if args.agentic else run_pipeline
+        result = pipeline_fn(text)
     except Exception as e:
         error = {
             "type": type(e).__name__,

@@ -113,8 +113,8 @@ def run_once_json(prompt: str, *, max_retries: int = 5, base_sleep: float = 2.0)
              raise
  
      raise RuntimeError(f"Failed to parse JSON after retries. last_raw={last_raw[:200]}")
- 
- 
+
+
 def run_pipeline(input_text: str):
      """运行完整事件抽取流水线。 """
      if not input_text or not input_text.strip():
@@ -150,11 +150,11 @@ def run_pipeline(input_text: str):
          f"文本：\n{resolved_text}"
      )
      seg = run_once_json(seg_prompt)
- 
+
      sentences = seg.get("sentences", [])
      if not isinstance(sentences, list) or not sentences:
          raise ValueError("sentence segmentation returned no sentences")
- 
+
      # Step 3) 逐句事件抽取。
      sentence_events = []
      for item in sentences:
@@ -162,7 +162,7 @@ def run_pipeline(input_text: str):
          sent = item.get("sentence")
          if not sid or not sent:
              continue
- 
+
          ee_prompt = (
              "使用 event-extraction-srl 技能。\n"
              "对下面句子做事件抽取与语义角色标注，并严格只输出 JSON。\n\n"
@@ -171,7 +171,7 @@ def run_pipeline(input_text: str):
          )
          ee = run_once_json(ee_prompt)
          sentence_events.append(ee)
- 
+
      # Step 4) 文档级聚合。
      agg_prompt = (
          "使用 event-aggregation 技能。\n"
@@ -180,10 +180,38 @@ def run_pipeline(input_text: str):
          f"sentence_events: {json.dumps(sentence_events, ensure_ascii=False)}"
      )
      aggregated = run_once_json(agg_prompt)
- 
+
      return {
          "preprocess": preprocess,
          "segmentation": seg,
          "sentence_events": sentence_events,
          "aggregated": aggregated,
      }
+
+def run_pipeline_agentic(input_text: str):
+     if not input_text or not input_text.strip():
+         raise ValueError("input_text is empty")
+
+     prompt = (
+         "你是一个事件抽取智能体。你可以使用系统提供的 Skills，自主决定需要使用哪些技能、顺序如何、是否需要多次调用同一技能。\n"
+         "目标：对输入文本完成事件抽取，并最终严格只输出一个 JSON 对象。\n\n"
+         "输出 JSON schema（必须包含这些字段）：\n"
+         "- preprocess: object（建议包含 resolved_text 字段；若无法改写，resolved_text 原样返回输入文本）\n"
+         "- segmentation: object（建议包含 sentences: [{id, sentence}]）\n"
+         "- sentence_events: array（逐句抽取的结果列表，每一项建议包含 sentence_id）\n"
+         "- aggregated: object（文档级汇总结果）\n\n"
+         "约束：\n"
+         "1) 你可以调用技能来完成每一步，不要臆造中间结果。\n"
+         "2) 最终必须输出严格 JSON，禁止输出解释性文字。\n"
+         "3) 如果某步失败或不确定，也必须在对应字段给出可解析的 JSON（不要省略字段）。\n\n"
+         f"输入文本：\n{input_text}"
+     )
+
+     result = run_once_json(prompt)
+     if not isinstance(result, dict):
+         raise ValueError(f"agentic pipeline returned non-object json: {type(result).__name__}")
+
+     for key in ["preprocess", "segmentation", "sentence_events", "aggregated"]:
+         if key not in result:
+             raise ValueError(f"agentic pipeline result missing field: {key}")
+     return result
