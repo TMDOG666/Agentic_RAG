@@ -14,9 +14,10 @@
  - runtime 采用懒加载：首次调用 `run_once()` / `main()` 时才触发初始化，避免 import 触发重 I/O。
  
 """
+import json
 import os
 import time
-from typing import Optional
+from typing import Any, Optional
 
 from adapter.runtime import create_runtime
 
@@ -125,6 +126,62 @@ def run_once(user_text: str) -> str:
                 return f"❌ 发生错误: {error_msg}"
 
     return f"❌ 发生错误: {last_error}"
+
+
+def _extract_first_json(text: str) -> Any:
+    """从模型返回的原始文本中提取**第一个可解析的 JSON 值**。
+
+    背景：
+    - 许多 LLM 会在 JSON 前后附带解释性文字、代码块标记（```）、或多段输出。
+    - 本函数采取“找到第一个 `[` 或 `{`，然后用 `json.JSONDecoder().raw_decode()` 解析”的策略，
+      以最大概率从混杂文本中恢复出第一个 JSON 对象/数组/标量。
+
+    行为与限制：
+    - 只解析**第一个** JSON 值（忽略后续文本）。
+    - 如果文本里没有 `[`/`{`，或从该位置开始无法解析出合法 JSON，会抛出 `ValueError`。
+    """
+    if not text:
+        raise ValueError("Empty response")
+
+    # 寻找 JSON 的起始位置：对象 `{` 或数组 `[`。
+    # 说明：不做更复杂的“代码块/前导说明”剥离，直接以首个候选为准。
+    start_candidates = [i for i, ch in enumerate(text) if ch in "[{" ]
+    if not start_candidates:
+        raise ValueError(f"No JSON start found in response: {text[:200]}")
+
+    start = start_candidates[0]
+    decoder = json.JSONDecoder()
+    try:
+        # raw_decode 允许从字符串中间开始解码，并返回 (obj, end_index)。
+        # 注意：end_index 是相对于传入子串的偏移，这里我们不需要用到它。
+        obj, _end = decoder.raw_decode(text[start:])
+        return obj
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Failed to parse JSON from response: {text[:200]}") from e
+
+
+def run_once_json(prompt: str, *, max_retries: int = 3, base_sleep: float = 1.0) -> Any:
+    """执行一次 `run_once()`，并将回复解析为 JSON。
+
+    典型用途：
+    - 让模型按约定输出结构化 JSON（例如事件抽取/聚合的 schema），便于下游程序消费。
+
+    重试策略：
+    - 仅在“JSON 解析失败”时进行指数退避重试（不在此处区分是模型输出偏离还是格式噪声）。
+    - 其它异常会透传（例如 `run_once()` 内部已将大部分 provider/网络错误转为用户可读文本）。
+    """
+    last_raw = ""
+    for attempt in range(max_retries):
+        raw = run_once(prompt)
+        last_raw = raw or ""
+        try:
+            return _extract_first_json(last_raw)
+        except Exception:
+            if attempt < max_retries - 1:
+                # 指数退避：给模型一次“重新按 JSON 输出”的机会。
+                time.sleep(base_sleep * (2**attempt))
+                continue
+            raise
 
 
 def main():
