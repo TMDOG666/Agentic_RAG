@@ -1,13 +1,23 @@
 # Agent Skills 运行机制与代码架构（本仓库）
 
-本文档从代码架构角度解释本仓库 `agent_with_skills.py` 中 Skills 的发现、加载、调用与执行流程。
+本文档从代码架构角度解释本仓库 AgentSkills 运行时中 Skills 的发现、加载、调用与执行流程。
+
+## 0. 分层（从高到低）
+
+- app：业务应用编排（示例：事件抽取流水线）
+- agent：对外运行入口（CLI / run_once）
+- adapter：runtime 组装 + LangGraph 工作流
+- tools：工具封装（function calling）
+- skill：SkillManager（技能发现/加载/资源访问/脚本执行）
+- llm：LLM 配置加载与模型创建（OpenAI Compatible）
 
 ## 1. 总体结构
 
 - **入口**
 
-  - `agent_with_skills.py` 中的 `main()` 提供命令行交互循环
-  - `run_once(user_text)` 用于把一次用户输入交给 LangGraph 工作流执行
+  - `agent/agent_with_skills.py` 中的 `main()` 提供命令行交互循环
+  - `agent/agent_with_skills.py` 中的 `run_once(user_text)` 用于把一次用户输入交给 LangGraph 工作流执行
+  - 兼容：仓库根目录 `agent_with_skills.py` 仅做入口转发
 - **核心组件**
 
   - **SkillManager**：负责 Skills 的扫描（元数据）、加载（指令/资源）、脚本执行
@@ -87,7 +97,7 @@
 
 ## 4. 工具层（Tools）：让模型“可调用”
 
-在 `agent_with_skills.py` 中，以下函数用 `@tool` 装饰，成为 LLM 可调用的工具：
+在 `tools/skill_tools.py` 中，以下函数用 `@tool` 装饰，成为 LLM 可调用的工具：
 
 - `load_skill(skill_name: str) -> str`
 - `read_skill_file(skill_name: str, filename: str) -> str`
@@ -98,7 +108,7 @@
 - `execute_skill_script` 同时兼容 `args` 与 `script_args` 两种字段名
   - 这是为了兼容不同模型/提示词可能产生的参数名
 
-工具列表在 `TOOLS = [...]` 中注册，然后在 `agent_node` 里通过 `MODEL.bind_tools(TOOLS)` 绑定给模型。
+工具列表在 `tools.skill_tools.create_tools()` 中统一创建，然后在 `adapter/graph.py` 的 `agent_node` 里通过 `model.bind_tools(tools)` 绑定给模型。
 
 ## 5. LangGraph 工作流：模型决策 ↔ 工具执行
 
@@ -108,7 +118,7 @@
 
   - 输入：`MessagesState`（历史对话消息）
   - 输出：模型返回的 message（可能包含 `tool_calls`）
-- **tools 节点**：`ToolNode(TOOLS)`
+- **tools 节点**：`ToolNode(tools)`
 
   - 输入：模型产生的 tool_calls
   - 输出：工具执行结果消息

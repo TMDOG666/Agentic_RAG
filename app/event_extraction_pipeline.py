@@ -15,14 +15,14 @@
  - 可能输出错误的工具调用格式（例如 tool_call 标签）：通过追加约束提示纠偏。
  
  注意：
- - 该模块依赖 `agent_with_skills.run_once()` 作为单轮调用入口。
+ - 该模块依赖 `agent.agent_with_skills.run_once()` 作为单轮调用入口。
  - 该模块不关心 LangGraph/Tools/Skills 的内部实现，只负责按步骤编排与聚合。
  """
 
 import json
 import time
 
-import agent_with_skills
+import agent.agent_with_skills as agent_with_skills
 
 
 def _extract_first_json(text: str):
@@ -126,7 +126,7 @@ def run_pipeline(input_text: str):
          "重要：resolved_text 必须是非空字符串；如果无法确定如何改写，请原样返回输入文本作为 resolved_text。\n\n"
          f"文本：\n{input_text}"
      )
-     preprocess = run_once_json(preprocess_prompt)
+     preprocess = agent_with_skills.run_once_json(preprocess_prompt)
 
      if not isinstance(preprocess, dict):
          raise ValueError(f"preprocess returned non-object json: {type(preprocess).__name__}")
@@ -149,7 +149,7 @@ def run_pipeline(input_text: str):
          "对下面文本分句，并严格只输出 JSON。\n\n"
          f"文本：\n{resolved_text}"
      )
-     seg = run_once_json(seg_prompt)
+     seg = agent_with_skills.run_once_json(seg_prompt)
 
      sentences = seg.get("sentences", [])
      if not isinstance(sentences, list) or not sentences:
@@ -169,7 +169,7 @@ def run_pipeline(input_text: str):
              f"sentence_id: {sid}\n"
              f"sentence: {sent}\n"
          )
-         ee = run_once_json(ee_prompt)
+         ee = agent_with_skills.run_once_json(ee_prompt)
          sentence_events.append(ee)
 
      # Step 4) 文档级聚合。
@@ -179,7 +179,7 @@ def run_pipeline(input_text: str):
          f"resolved_text: {resolved_text}\n"
          f"sentence_events: {json.dumps(sentence_events, ensure_ascii=False)}"
      )
-     aggregated = run_once_json(agg_prompt)
+     aggregated = agent_with_skills.run_once_json(agg_prompt)
 
      return {
          "preprocess": preprocess,
@@ -207,7 +207,7 @@ def run_pipeline_agentic(input_text: str):
          f"输入文本：\n{input_text}"
      )
 
-     result = run_once_json(prompt)
+     result = agent_with_skills.run_once_json(prompt)
      if not isinstance(result, dict):
          raise ValueError(f"agentic pipeline returned non-object json: {type(result).__name__}")
 

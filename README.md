@@ -36,14 +36,15 @@
 
 ```
 .
-├── agent_with_skills.py              # 智能体入口（LangGraph + Tools + Skills）
+├── agent_with_skills.py              # 兼容入口：转发到 `agent/agent_with_skills.py`
 ├── agent_config.yaml                 # 模型/Provider 配置
 ├── run_event_extraction_pipeline.py  # 事件抽取流水线运行入口
 ├── app/                              # 应用层：多技能编排示例
-├── adapter/                          # 运行时组装（model/graph/skills/tools）
-├── llm/                              # LLM 适配与配置
-├── tools/                            # Agent 可调用工具（Skill 工具等）
-├── skill/                            # SkillManager 权威逻辑
+├── agent/                            # Agent 层：对外运行入口（run_once/CLI）
+├── adapter/                          # Adapter 层：runtime 组装 + LangGraph 工作流
+├── tools/                            # Tools 层：Agent 可调用工具（Skill 工具等）
+├── skill/                            # Skill 层：SkillManager 权威逻辑
+├── llm/                              # LLM 接口层：配置加载 + 模型创建
 ├── test_data.csv                     # 测试数据
 ├── README.md                         # 本文件
 └── .cursor/skills/                   # Skills 目录
@@ -90,6 +91,17 @@ export SILICONFLOW_API_KEY=your_api_key_here
 ```bash
 python agent_with_skills.py
 ```
+
+## 🧱 分层结构（从高到低）
+
+本仓库按以下层级组织（高层只依赖低层，避免循环依赖）：
+
+- **app**：业务应用编排（示例：事件抽取流水线）
+- **agent**：对外运行接口（CLI / `run_once`），供 app 层复用
+- **adapter**：运行时组装（LLM + Tools + Skills + LangGraph 工作流）
+- **tools**：将底层能力封装为可被模型 function calling 的工具
+- **skill**：SkillManager（扫描/加载/读文件/执行脚本 + 元数据缓存 registry）
+- **llm**：LLM 配置加载与模型创建（OpenAI Compatible）
 
 ### 4. （可选）切换模型 Provider
 

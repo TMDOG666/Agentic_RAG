@@ -9,7 +9,7 @@
  - LLM 接口层：`load_agent_config` + `create_model`（读取配置并创建模型实例）
  - 接入层工作流：`create_system_prompt` + `build_graph`（LangGraph 工作流）
  
- 返回的 runtime 字典是顶层入口（`agent_with_skills.py`）唯一依赖的“组装产物”。
+ 返回的 runtime 字典是 Agent 层入口（`agent.agent_with_skills`）唯一依赖的“组装产物”。
  
 """
 
