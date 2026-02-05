@@ -10,10 +10,7 @@
 
 services:
   neo4j:
-    build:
-      context: ./neo4j
-      dockerfile: Dockerfile
-    image: grag-neo4j:latest
+    image: neo4j:5.26.0-community
     container_name: grag-neo4j
     restart: unless-stopped
     environment:
@@ -71,10 +68,7 @@ services:
 
   # Milvus 向量库（standalone，依赖上面两个服务）
   milvus:
-    build:
-      context: ./milvus
-      dockerfile: Dockerfile
-    image: grag-milvus:latest
+    image: milvusdb/milvus:v2.4.15
     container_name: grag-milvus
     restart: unless-stopped
     command: ["milvus", "run", "standalone"]
@@ -100,10 +94,7 @@ services:
       milvus-minio: { condition: service_healthy }
 
   postgres:
-    build:
-      context: ./postgres
-      dockerfile: Dockerfile
-    image: grag-postgres:latest
+    image: postgres:16-alpine
     container_name: grag-postgres
     restart: unless-stopped
     environment:
@@ -111,8 +102,9 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       TZ: Asia/Shanghai
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
     ports:
-      - "5432:5432"
+      - "5430:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:

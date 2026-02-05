@@ -1,6 +1,6 @@
 # GraphRAG 数据库 Docker 编排
 
-本目录提供 **Neo4j**、**Milvus**、**PostgreSQL** 三个数据库的 Dockerfile 与 docker-compose 编排，与项目根目录 `config/grag_config.yaml` 中的默认连接一致。
+本目录提供 **Neo4j**、**Milvus**、**PostgreSQL** 三个数据库的 docker-compose 编排，直接使用官方镜像，与项目根目录 `config/grag_config.yaml` 中的默认连接一致。
 
 ## 服务与端口
 
@@ -73,13 +73,7 @@
 infrastructure/docker/
 ├── docker-compose.yml   # 编排入口
 ├── .env.example         # 环境变量示例
-├── README.md            # 本说明
-├── neo4j/
-│   └── Dockerfile       # Neo4j 镜像
-├── milvus/
-│   └── Dockerfile       # Milvus 镜像
-└── postgres/
-    └── Dockerfile       # PostgreSQL 镜像
+└── README.md            # 本说明
 ```
 
 ## 数据持久化
