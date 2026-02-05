@@ -157,7 +157,7 @@ graph_databases:
   neo4j:
     uri: bolt://localhost:7687
     user: neo4j
-    password_env: NEO4J_PASSWORD
+    password: neo4j123456
     database: neo4j
     connection_timeout: 30
     max_connection_pool_size: 50
@@ -176,10 +176,10 @@ graph_databases:
 relational_databases:
   postgres:
     host: localhost
-    port: 5432
+    port: 5430
     database: grag
     user: postgres
-    password_env: POSTGRES_PASSWORD
+    password: postgres123
     schema: public
     connection_timeout: 30
     max_connections: 20

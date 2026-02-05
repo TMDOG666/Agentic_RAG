@@ -330,9 +330,25 @@ class ConfigValidator:
 
             # 验证连接参数
             if db_name == "neo4j":
-                required_fields = ["uri", "user", "password_env"]
+                required_fields = ["uri", "user"]
+                # 密码字段：password_env 或 password 至少需要一个
+                if "password_env" not in db_config and "password" not in db_config:
+                    results.append(ValidationResult(
+                        level=ValidationLevel.ERROR,
+                        field_path=f"graph_databases.{db_name}",
+                        message="必须提供 password_env 或 password 字段之一",
+                        suggestion="添加 password_env（环境变量名）或 password（直接密码）配置"
+                    ))
             elif db_name == "nebula":
-                required_fields = ["host", "port", "user", "password_env"]
+                required_fields = ["host", "port", "user"]
+                # 密码字段：password_env 或 password 至少需要一个
+                if "password_env" not in db_config and "password" not in db_config:
+                    results.append(ValidationResult(
+                        level=ValidationLevel.ERROR,
+                        field_path=f"graph_databases.{db_name}",
+                        message="必须提供 password_env 或 password 字段之一",
+                        suggestion="添加 password_env（环境变量名）或 password（直接密码）配置"
+                    ))
             else:
                 continue
 
@@ -364,7 +380,15 @@ class ConfigValidator:
 
             # 验证连接参数
             if db_name in ["postgres", "mysql"]:
-                required_fields = ["host", "port", "database", "user", "password_env"]
+                required_fields = ["host", "port", "database", "user"]
+                # 密码字段：password_env 或 password 至少需要一个
+                if "password_env" not in db_config and "password" not in db_config:
+                    results.append(ValidationResult(
+                        level=ValidationLevel.ERROR,
+                        field_path=f"relational_databases.{db_name}",
+                        message="必须提供 password_env 或 password 字段之一",
+                        suggestion="添加 password_env（环境变量名）或 password（直接密码）配置"
+                    ))
             elif db_name == "sqlite":
                 required_fields = ["database_path"]
             else:
