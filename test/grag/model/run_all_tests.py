@@ -62,7 +62,21 @@ def run_all_tests():
         test_results["errors"].append(("RerankerClient", str(e)))
         print(f"\n❌ RerankerClient 测试失败: {e}")
 
-    # 4. 测试 ModelManager
+    # 4. 测试 VisionClient
+    print("\n" + "=" * 70)
+    print("【4/5】测试 VisionClient 模块")
+    print("=" * 70)
+    try:
+        from test_vision_client import run_tests as run_vision_tests
+        run_vision_tests()
+        test_results["passed"] += 1
+        print("\n✅ VisionClient 测试通过")
+    except Exception as e:
+        test_results["failed"] += 1
+        test_results["errors"].append(("VisionClient", str(e)))
+        print(f"\n❌ VisionClient 测试失败: {e}")
+
+    # 5. 测试 ModelManager
     print("\n" + "=" * 70)
     print("【4/4】测试 ModelManager 模块")
     print("=" * 70)

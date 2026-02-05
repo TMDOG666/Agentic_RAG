@@ -10,6 +10,9 @@ embedding_provider: siliconflow
 # 默认使用的重排序模型提供商（可选）
 reranker_provider: siliconflow
 
+# 默认使用的视觉模型提供商（用于OCR和图像理解）
+vision_provider: siliconflow
+
 # 默认使用的向量数据库
 vector_db_provider: milvus
 
@@ -62,6 +65,26 @@ llm_providers:
     temperature: 0.1
     max_tokens: 4096
     timeout: 120
+
+# ============================================================================
+# 视觉模型提供商配置（用于OCR和图像理解）
+# ============================================================================
+vision_providers:
+  siliconflow:
+    model: Qwen/Qwen3-VL-30B-A3B-Instruct
+    base_url: https://api.siliconflow.cn/v1
+    api_key_env: SILICONFLOW_API_KEY
+    temperature: 0.1
+    max_tokens: 4096
+    timeout: 120
+
+  openai:
+    model: gpt-4o
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    temperature: 0.1
+    max_tokens: 4096
+    timeout: 60
 
 # ============================================================================
 # 向量嵌入模型提供商配置

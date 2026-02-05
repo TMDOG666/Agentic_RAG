@@ -25,6 +25,7 @@ class ProviderType(str, Enum):
     LLM = "llm"
     EMBEDDING = "embedding"
     RERANKER = "reranker"
+    VISION = "vision"
     VECTOR_DB = "vector_db"
     GRAPH_DB = "graph_db"
     RELATIONAL_DB = "relational_db"
@@ -249,6 +250,7 @@ class GraphRAGSettings(BaseModel):
     llm_provider: str = Field(..., description="默认LLM提供商")
     embedding_provider: str = Field(..., description="默认向量嵌入提供商")
     reranker_provider: Optional[str] = Field(None, description="默认重排序提供商")
+    vision_provider: Optional[str] = Field(None, description="默认视觉模型提供商")
     vector_db_provider: str = Field(..., description="默认向量数据库")
     graph_db_provider: str = Field(..., description="默认图数据库")
     relational_db_provider: str = Field(..., description="默认关系数据库")
@@ -257,6 +259,7 @@ class GraphRAGSettings(BaseModel):
     llm_providers: Dict[str, LLMProviderConfig] = Field(..., description="LLM提供商配置")
     embedding_providers: Dict[str, EmbeddingProviderConfig] = Field(..., description="向量嵌入提供商配置")
     reranker_providers: Optional[Dict[str, RerankerProviderConfig]] = Field(None, description="重排序提供商配置")
+    vision_providers: Optional[Dict[str, LLMProviderConfig]] = Field(None, description="视觉模型提供商配置")
 
     # 数据库配置
     vector_databases: Dict[str, VectorDatabaseConfig] = Field(..., description="向量数据库配置")
@@ -277,6 +280,7 @@ class GraphRAGSettings(BaseModel):
             llm_provider = values.get('llm_provider')
             embedding_provider = values.get('embedding_provider')
             reranker_provider = values.get('reranker_provider')
+            vision_provider = values.get('vision_provider')
             vector_db_provider = values.get('vector_db_provider')
             graph_db_provider = values.get('graph_db_provider')
             relational_db_provider = values.get('relational_db_provider')
@@ -284,6 +288,7 @@ class GraphRAGSettings(BaseModel):
             llm_providers = values.get('llm_providers', {})
             embedding_providers = values.get('embedding_providers', {})
             reranker_providers = values.get('reranker_providers', {})
+            vision_providers = values.get('vision_providers', {})
             vector_databases = values.get('vector_databases', {})
             graph_databases = values.get('graph_databases', {})
             relational_databases = values.get('relational_databases', {})
@@ -296,6 +301,9 @@ class GraphRAGSettings(BaseModel):
 
             if reranker_provider and reranker_providers and reranker_provider not in reranker_providers:
                 raise ValueError(f"reranker_provider '{reranker_provider}' 不在 reranker_providers 中定义")
+
+            if vision_provider and vision_providers and vision_provider not in vision_providers:
+                raise ValueError(f"vision_provider '{vision_provider}' 不在 vision_providers 中定义")
 
             if vector_db_provider and vector_db_provider not in vector_databases:
                 raise ValueError(f"vector_db_provider '{vector_db_provider}' 不在 vector_databases 中定义")
@@ -326,6 +334,8 @@ class GraphRAGSettings(BaseModel):
                 provider_name = self.embedding_provider
             elif provider_type == ProviderType.RERANKER:
                 provider_name = self.reranker_provider
+            elif provider_type == ProviderType.VISION:
+                provider_name = self.vision_provider
             elif provider_type == ProviderType.VECTOR_DB:
                 provider_name = self.vector_db_provider
             elif provider_type == ProviderType.GRAPH_DB:
@@ -346,6 +356,11 @@ class GraphRAGSettings(BaseModel):
                 return self.reranker_providers[provider_name]
             else:
                 raise ValueError("未配置重排序提供商")
+        elif provider_type == ProviderType.VISION:
+            if self.vision_providers:
+                return self.vision_providers[provider_name]
+            else:
+                raise ValueError("未配置视觉模型提供商")
         elif provider_type == ProviderType.VECTOR_DB:
             return self.vector_databases[provider_name]
         elif provider_type == ProviderType.GRAPH_DB:

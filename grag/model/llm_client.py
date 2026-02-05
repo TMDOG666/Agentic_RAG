@@ -240,6 +240,29 @@ class LLMClient:
         """
         self._model = None
 
+    def chat(self, text: str) -> str:
+        """使用当前 LLM 进行一次简单对话（单轮、纯文本）。
+
+        主要用于诸如文档标准化这类“给定一段文本，让模型直接返回整理结果”的场景。
+
+        Args:
+            text: 传给模型的完整提示词/文本。
+
+        Returns:
+            模型返回的文本内容（如果响应对象有 content 字段，则优先使用）。
+        """
+        model = self.get_model()
+        try:
+            response = model.invoke([{"role": "user", "content": text}])
+        except Exception as e:
+            # 让上层决定如何处理异常（预处理里会捕获并回退到原始内容）
+            raise RuntimeError(f"LLM 对话调用失败: {e}") from e
+
+        # LangChain ChatOpenAI 通常返回带 .content 的消息对象
+        if hasattr(response, "content"):
+            return response.content
+        return str(response)
+
 
 # 全局LLM客户端实例
 _default_llm_client: Optional[LLMClient] = None

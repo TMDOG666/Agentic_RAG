@@ -38,8 +38,9 @@ python run_all_tests.py
 | `test_llm_client.py` | LLMClient 初始化、提供商信息、get_model 缓存、refresh、全局函数 |
 | `test_embedding_client.py` | EmbeddingClient 初始化、get_embeddings、维度、refresh、全局函数 |
 | `test_reranker_client.py` | RerankerClient 初始化、is_available、rerank 返回格式、全局函数 |
+| `test_vision_client.py` | VisionClient 初始化、视觉模型配置校验、客户端懒加载、全局函数 |
 | `test_model_manager.py` | ModelManager 初始化、各 get_*_client、model_info/status、refresh/cleanup、全局函数 |
-| `run_all_tests.py` | 依次执行上述 4 个模块的 run_tests() 并汇总结果 |
+| `run_all_tests.py` | 依次执行上述 5 个模块的 run_tests() 并汇总结果 |
 
 ## 与 Config 的联动
 
