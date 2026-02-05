@@ -1,0 +1,315 @@
+# GraphRAG Configuration File
+# GraphRAG系统配置文件，包含LLM、向量模型、重排序模型、向量数据库、图数据库、关系数据库等配置
+
+# 默认使用的LLM提供商
+llm_provider: siliconflow
+
+# 默认使用的向量嵌入模型提供商
+embedding_provider: siliconflow
+
+# 默认使用的重排序模型提供商（可选）
+reranker_provider: siliconflow
+
+# 默认使用的向量数据库
+vector_db_provider: milvus
+
+# 默认使用的图数据库
+graph_db_provider: neo4j
+
+# 默认使用的关系数据库
+relational_db_provider: postgres
+
+# ============================================================================
+# LLM 提供商配置
+# ============================================================================
+llm_providers:
+  siliconflow:
+    model: Qwen/Qwen3-Next-80B-A3B-Instruct
+    base_url: https://api.siliconflow.cn/v1
+    api_key_env: SILICONFLOW_API_KEY
+    temperature: 0.1
+    max_tokens: 4096
+    timeout: 60
+
+  openai:
+    model: gpt-4o
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    temperature: 0.1
+    max_tokens: 4096
+    timeout: 60
+
+  openai_compatible:
+    model: gpt-4o-mini
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    temperature: 0.1
+    max_tokens: 4096
+    timeout: 60
+
+  vllm:
+    model: Qwen3-Next-80B-A3B
+    base_url: http://192.168.1.220:8000/v1
+    api_key_env: OPENAI_API_KEY
+    temperature: 0.1
+    max_tokens: 4096
+    timeout: 120
+
+  ollama:
+    model: qwen2.5:14b-instruct
+    base_url: http://127.0.0.1:11434/v1
+    api_key_env: OPENAI_API_KEY
+    temperature: 0.1
+    max_tokens: 4096
+    timeout: 120
+
+# ============================================================================
+# 向量嵌入模型提供商配置
+# ============================================================================
+embedding_providers:
+  siliconflow:
+    model: BAAI/bge-m3
+    base_url: https://api.siliconflow.cn/v1
+    api_key_env: SILICONFLOW_API_KEY
+    dimension: 1024
+    max_batch_size: 32
+    timeout: 60
+
+  openai:
+    model: text-embedding-3-large
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    dimension: 3072
+    max_batch_size: 2048
+    timeout: 60
+
+  openai_compatible:
+    model: text-embedding-3-small
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    dimension: 1536
+    max_batch_size: 2048
+    timeout: 60
+
+  huggingface:
+    model: BAAI/bge-large-zh-v1.5
+    base_url: null
+    api_key_env: HF_TOKEN
+    dimension: 1024
+    max_batch_size: 32
+    timeout: 120
+
+# ============================================================================
+# 重排序模型提供商配置（可选）
+# ============================================================================
+reranker_providers:
+  siliconflow:
+    model: BAAI/bge-reranker-v2-m3
+    base_url: https://api.siliconflow.cn/v1
+    api_key_env: SILICONFLOW_API_KEY
+    top_k: 10
+    timeout: 60
+
+  openai:
+    model: gpt-4o-mini
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    top_k: 10
+    timeout: 60
+
+# ============================================================================
+# 向量数据库配置
+# ============================================================================
+vector_databases:
+  milvus:
+    host: localhost
+    port: 19530
+    user: null
+    password: null
+    db_name: default
+    collection_name: grag_documents
+    index_type: IVF_FLAT
+    metric_type: COSINE
+    connection_timeout: 30
+
+  qdrant:
+    host: localhost
+    port: 6333
+    api_key: null
+    collection_name: grag_documents
+    distance: Cosine
+    vector_size: 1024
+    connection_timeout: 30
+
+  pinecone:
+    api_key_env: PINECONE_API_KEY
+    environment: us-east-1
+    index_name: grag-documents
+    collection_name: grag-documents
+    dimension: 1024
+    metric: cosine
+    connection_timeout: 30
+
+# ============================================================================
+# 图数据库配置
+# ============================================================================
+graph_databases:
+  neo4j:
+    uri: bolt://localhost:7687
+    user: neo4j
+    password_env: NEO4J_PASSWORD
+    database: neo4j
+    connection_timeout: 30
+    max_connection_pool_size: 50
+
+  nebula:
+    host: localhost
+    port: 9669
+    user: root
+    password_env: NEBULA_PASSWORD
+    space: grag_graph
+    connection_timeout: 30
+
+# ============================================================================
+# 关系数据库配置
+# ============================================================================
+relational_databases:
+  postgres:
+    host: localhost
+    port: 5432
+    database: grag
+    user: postgres
+    password_env: POSTGRES_PASSWORD
+    schema: public
+    connection_timeout: 30
+    max_connections: 20
+    ssl_mode: prefer
+
+  mysql:
+    host: localhost
+    port: 3306
+    database: grag
+    user: root
+    password_env: MYSQL_PASSWORD
+    charset: utf8mb4
+    connection_timeout: 30
+    max_connections: 20
+
+  sqlite:
+    database_path: ./data/grag.db
+    connection_timeout: 30
+    max_connections: 1
+
+# ============================================================================
+# 系统配置
+# ============================================================================
+system:
+  # 工作目录
+  workspace_dir: ./data
+
+  # 日志配置
+  logging:
+    level: INFO
+    file_path: ./logs/grag.log
+    max_file_size: 100MB
+    backup_count: 5
+
+  # 缓存配置
+  cache:
+    enabled: true
+    redis_host: localhost
+    redis_port: 6379
+    redis_db: 0
+    ttl_seconds: 3600
+
+  # 监控配置
+  monitoring:
+    enabled: true
+    metrics_port: 9090
+    health_check_interval: 30
+
+  # 性能配置
+  performance:
+    max_workers: 4
+    batch_size: 32
+    chunk_size: 512
+    overlap_size: 50
+
+# ============================================================================
+# 预处理配置
+# ============================================================================
+preprocessing:
+  text_cleaning:
+    remove_html: true
+    remove_urls: true
+    remove_emails: true
+    normalize_whitespace: true
+    remove_punctuation: false
+    lowercase: false
+
+  document_processing:
+    supported_formats: [pdf, docx, txt, md, html]
+    max_file_size: 50MB
+    encoding: utf-8
+    extract_metadata: true
+
+# ============================================================================
+# 图构建配置
+# ============================================================================
+graph_construction:
+  chunking:
+    strategy: semantic  # fixed_length, semantic, hierarchical
+    chunk_size: 512
+    overlap: 50
+    separator: "\n\n"
+
+  entity_extraction:
+    enabled: true
+    model_provider: siliconflow
+    confidence_threshold: 0.7
+    max_entities_per_chunk: 10
+
+  relation_extraction:
+    enabled: true
+    model_provider: siliconflow
+    confidence_threshold: 0.6
+    max_relations_per_chunk: 15
+
+  coreference_resolution:
+    enabled: true
+    model_provider: siliconflow
+    max_distance: 5
+
+  graph_optimization:
+    remove_duplicates: true
+    merge_similar_entities: true
+    similarity_threshold: 0.85
+
+# ============================================================================
+# 检索配置
+# ============================================================================
+retrieval:
+  keyword_search:
+    enabled: true
+    top_k: 20
+    min_score: 0.1
+
+  semantic_search:
+    enabled: true
+    top_k: 10
+    similarity_threshold: 0.7
+    rerank_enabled: true
+
+  graph_search:
+    enabled: true
+    max_depth: 3
+    max_paths: 5
+    relationship_weight: 0.8
+
+  fusion_search:
+    enabled: true
+    weights:
+      keyword: 0.2
+      semantic: 0.5
+      graph: 0.3
+    top_k: 10
