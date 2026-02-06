@@ -281,9 +281,15 @@ preprocessing:
 # ============================================================================
 graph_construction:
   chunking:
-    strategy: semantic  # fixed_length, semantic, hierarchical
+    strategy: semantic_recursive_greedy
+    max_token_threshold: 512
+    min_token_threshold: 128
+    preserve_headings: true
+    enable_fallback: true
+    fallback_split_order: ["\n\n", "\n", "sentence", "fixed_step"]
+    fallback_fixed_step_chars: 2048
     chunk_size: 512
-    overlap: 50
+    overlap: 0
     separator: "\n\n"
 
   entity_extraction:
