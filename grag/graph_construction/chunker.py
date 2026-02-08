@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 from types import SimpleNamespace
 from typing import Callable, List, Optional, Sequence, Tuple
-from ..config import get_grag_settings
+from ..config import get_settings
 
 def _default_token_counter(text: str) -> int:
     """默认 token 计数器。
@@ -56,7 +56,9 @@ class SemanticChunker:
             enable_fallback: 是否启用回退机制
             fallback_fixed_step_chars: 回退机制固定步长（字符数）
         """
-        cfg = self._get_config()
+        settings = get_settings()
+
+        cfg = settings.graph_construction.chunking
 
         def _get_value(key: str, default):
             if cfg is None:
@@ -111,23 +113,6 @@ class SemanticChunker:
             (2, re.compile(r"^\d+(?:\.\d+)*[\.)]\s+.+$", re.MULTILINE)),
             (3, re.compile(r"^[a-zA-Z][\.)]\s+.+$", re.MULTILINE)),
         )
-
-    def _get_config(self):
-        """从配置系统读取 chunking 配置。
-
-        注意：配置可能尚未 initialize，此时返回 None 并使用代码默认值。
-        """
-        try:
-            settings = get_grag_settings()
-            return settings.graph_construction.chunking
-        except Exception:
-            try:
-                from ..config import get_settings
-
-                settings = get_settings()
-                return settings.graph_construction.chunking
-            except Exception:
-                return None
 
     def chunk(self, text: str) -> List[str]:
         """对文本进行语义分块。

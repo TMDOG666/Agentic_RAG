@@ -190,6 +190,16 @@ class GraphConstructionConfig(BaseModel):
         "overlap": 50,
         "separator": "\n\n"
     }, description="分块配置")
+    entity_relation_extraction: Dict[str, Any] = Field({
+        "enabled": True,
+        "model_provider": "siliconflow",
+        "confidence_threshold": 0.7,
+        "max_entities_per_chunk": 10,
+        "bench_num": 4,
+        "user_entity_type": [],
+        "max_retries": 3,
+        "base_sleep_seconds": 2.0,
+    }, description="实体关系抽取配置")
     entity_extraction: Dict[str, Any] = Field({
         "enabled": True,
         "model_provider": "siliconflow",

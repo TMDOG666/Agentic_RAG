@@ -292,17 +292,15 @@ graph_construction:
     overlap: 0
     separator: "\n\n"
 
-  entity_extraction:
+  entity_relation_extraction:
     enabled: true
     model_provider: siliconflow
     confidence_threshold: 0.7
     max_entities_per_chunk: 10
-
-  relation_extraction:
-    enabled: true
-    model_provider: siliconflow
-    confidence_threshold: 0.6
-    max_relations_per_chunk: 15
+    bench_num: 4
+    user_entity_type: []
+    max_retries: 3
+    base_sleep_seconds: 2.0
 
   coreference_resolution:
     enabled: true

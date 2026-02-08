@@ -30,7 +30,7 @@ from pathlib import Path
 from langchain_openai import ChatOpenAI
 from langchain_core.language_models import BaseChatModel
 
-from ..config import get_grag_settings, ProviderType
+from ..config import get_grag_settings, get_settings, ProviderType
 
 
 class LLMClient:
@@ -47,7 +47,10 @@ class LLMClient:
         """
         self.provider_name = provider_name
         self._model: Optional[BaseChatModel] = None
-        self._settings = get_grag_settings()
+        try:
+            self._settings = get_grag_settings()
+        except Exception:
+            self._settings = get_settings()
 
     def get_model(self) -> BaseChatModel:
         """获取或创建LLM模型实例
