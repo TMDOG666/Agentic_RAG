@@ -287,10 +287,29 @@ graph_construction:
     preserve_headings: true
     enable_fallback: true
     fallback_split_order: ["\n\n", "\n", "sentence", "fixed_step"]
-    fallback_fixed_step_chars: 2048
+    fallback_fixed_step_chars: 1200
     chunk_size: 512
     overlap: 0
     separator: "\n\n"
+
+  # ============================================================================
+  # 文档内部：实体统一与知识融合（Entity Resolution + Knowledge Fusion）
+  # ============================================================================
+  entity_resolution_knowledge_fusion:
+    enabled: true
+    # 向量化阶段使用的 embedding provider。
+    # - null：默认取 embedding_providers 的第一个 key（yaml 顺序），例如 siliconflow
+    # - 指定：例如 openai / huggingface
+    embedding_provider: null
+    clustering:
+      # 聚类算法：默认 hdbscan
+      method: hdbscan
+      # 形成一个簇的最小样本数（越大越保守）
+      min_cluster_size: 3
+    # LLM 融合阶段并发数
+    fusion_bench_num: 4
+    # 可选：融合阶段使用的 LLM provider；null 表示使用全局 llm_provider
+    fusion_llm_provider: null
 
   entity_relation_extraction:
     enabled: true

@@ -190,6 +190,22 @@ class GraphConstructionConfig(BaseModel):
         "overlap": 50,
         "separator": "\n\n"
     }, description="分块配置")
+    entity_resolution_knowledge_fusion: Dict[str, Any] = Field({
+        "enabled": True,
+        # 向量化阶段使用的 embedding provider。
+        # - None: 默认取 settings.embedding_providers 的第一个 key（yaml 顺序）
+        # - str : 指定 provider 名称，例如 siliconflow / openai
+        "embedding_provider": None,
+        # 聚类配置：默认使用 hdbscan。
+        "clustering": {
+            "method": "hdbscan",
+            "min_cluster_size": 2,
+        },
+        # 融合阶段（LLM）并发数
+        "fusion_bench_num": 4,
+        # 可选：融合阶段使用的 LLM provider（None 表示使用 settings.llm_provider）
+        "fusion_llm_provider": None,
+    }, description="实体统一与知识融合（文档内部）配置")
     entity_relation_extraction: Dict[str, Any] = Field({
         "enabled": True,
         "model_provider": "siliconflow",

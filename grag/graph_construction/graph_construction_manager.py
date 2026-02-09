@@ -1,6 +1,7 @@
 # Graph Construction Manager Module
 
 import asyncio
+import uuid
 from dataclasses import dataclass
 from typing import Callable, List, Optional
 
@@ -8,6 +9,11 @@ from .chunker import SemanticChunker
 from .coreference_resolver import CoreferenceResolver, DocumentWithCoreferenceResolution
 from .entity_relation_extractor import Chunk, ChunkWithEntityRelationRaw, EntityRelationExtractor
 from .entity_relation_parser import ParsedEntityRelation, parse_entity_relation_raw
+from .entity_resolution_knowledge_fusion import (
+    IntraDocumentFusionResult,
+    collect_entities_from_chunks,
+    resolve_and_fuse_intra_document,
+)
 
 
 """grag.graph_construction.graph_construction_manager
@@ -21,7 +27,7 @@ from .entity_relation_parser import ParsedEntityRelation, parse_entity_relation_
     2) 分块
     3) 实体关系抽取
     4) raw 结果解析为结构化对象
-    5) 图谱构建（当前留空占位）
+    5) 图谱构建（当前留空）
 
 设计原则：
 - “流程编排”与“具体能力模块”解耦：
@@ -78,6 +84,8 @@ class GraphConstructionManager:
         *,
         coref_llm_chat_fn: Optional[Callable[[str], str]] = None,
         entity_relation_llm_chat_fn: Optional[Callable[[str], str]] = None,
+        fusion_llm_chat_fn: Optional[Callable[[str], str]] = None,
+        embedding_fn: Optional[Callable[[List[str], str], List[List[float]]]] = None,
     ) -> None:
         """创建流程编排器。
 
@@ -94,6 +102,8 @@ class GraphConstructionManager:
         """
         self._coref_llm_chat_fn = coref_llm_chat_fn
         self._entity_relation_llm_chat_fn = entity_relation_llm_chat_fn
+        self._fusion_llm_chat_fn = fusion_llm_chat_fn
+        self._embedding_fn = embedding_fn
 
     def run(self, text: str, doc_time: str, doc_name: str) -> GraphConstructionResult:
         """执行图构建前置流水线。
@@ -125,7 +135,7 @@ class GraphConstructionManager:
         chunks: List[Chunk] = []
         for i, t in enumerate(chunk_texts, 1):
             # chunk_id 这里按 doc_name + 序号生成，便于后续溯源。
-            chunks.append(Chunk(chunk_id=f"{doc_name}::chunk_{i}", text=t))
+            chunks.append(Chunk(chunk_id=f"{doc_name}::chunk_{i}_{uuid.uuid4().hex}", text=t))
 
         # Step 3) 实体关系抽取（extractor 内部会根据 bench_num 控并发）
         extractor = EntityRelationExtractor(llm_chat_fn=self._entity_relation_llm_chat_fn)
@@ -145,8 +155,28 @@ class GraphConstructionManager:
                 )
             )
 
-        # Step 5) 图谱构建（未实现，占位）
-        graph_placeholder = None
+        # Step 5) 文档内部：实体统一 + 知识融合 + 关系重定向
+        #
+        # 说明：
+        # - 这一步不改动 chunk 级输出（保留原始抽取结果，便于追溯）
+        # - 融合后的“文档级实体/关系”放入 result.graph 字段（当前仍是占位容器）
+        fusion_input_entities = collect_entities_from_chunks(
+            (c.chunk_id, c.parsed.entities) for c in parsed_chunks
+        )
+        fusion_input_relations = [rel for c in parsed_chunks for rel in c.parsed.relations]
+
+        fusion_result: IntraDocumentFusionResult = asyncio.run(
+            resolve_and_fuse_intra_document(
+                entities=fusion_input_entities,
+                relations=fusion_input_relations,
+                llm_chat_fn=self._fusion_llm_chat_fn,
+                embedding_fn=self._embedding_fn,
+            )
+        )
+
+        graph_placeholder = {
+            "intra_document_fusion": fusion_result,
+        }
 
         return GraphConstructionResult(
             doc_name=doc_name,
