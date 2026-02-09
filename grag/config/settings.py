@@ -215,7 +215,10 @@ class GraphConstructionConfig(BaseModel):
     coreference_resolution: Dict[str, Any] = Field({
         "enabled": True,
         "model_provider": "siliconflow",
-        "max_distance": 5
+        "max_distance": 5,
+        "bench_num": 4,
+        "max_retries": 3,
+        "base_sleep_seconds": 2.0,
     }, description="指代消解配置")
     graph_optimization: Dict[str, Any] = Field({
         "remove_duplicates": True,

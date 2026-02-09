@@ -282,8 +282,8 @@ preprocessing:
 graph_construction:
   chunking:
     strategy: semantic_recursive_greedy
-    max_token_threshold: 512
-    min_token_threshold: 128
+    max_token_threshold: 1500
+    min_token_threshold: 1000
     preserve_headings: true
     enable_fallback: true
     fallback_split_order: ["\n\n", "\n", "sentence", "fixed_step"]
@@ -306,6 +306,9 @@ graph_construction:
     enabled: true
     model_provider: siliconflow
     max_distance: 5
+    bench_num: 4
+    max_retries: 3
+    base_sleep_seconds: 2.0
 
   graph_optimization:
     remove_duplicates: true
