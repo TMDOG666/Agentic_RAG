@@ -208,7 +208,7 @@ class CoreferenceResolver:
         return resolved
 
     async def resolve_text(self, text: str) -> DocumentWithCoreferenceResolution:
-        """对整篇文档进行一次指代消解（不并发）。
+        """对整篇文档进行一次指代消解。
 
         产出：
         - `coreference_raw`：LLM 输出的 JSON 字符串
