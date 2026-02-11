@@ -3,3 +3,4 @@ __pycache__
 .cursor/skills/.registry/
 .env
 test_data/
+data/

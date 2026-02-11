@@ -23,6 +23,8 @@
 
 from dataclasses import dataclass
 from typing import List, Optional
+ 
+from grag.monitoring.monitoring_manager import get_current_monitor
 
 
 SEP_TOKEN = "<|SEP|>"
@@ -86,6 +88,11 @@ def parse_entity_relation_raw(raw: str) -> ParsedEntityRelation:
 
     text = (raw or "").strip()
     if not text:
+        monitor = get_current_monitor()
+        if monitor is not None:
+            monitor.observe("entity_relation_parsing.entities", 0.0)
+            monitor.observe("entity_relation_parsing.relations", 0.0)
+            monitor.observe("entity_relation_parsing.parse_errors", 0.0)
         return ParsedEntityRelation(entities=entities, relations=relations, errors=errors)
 
     for idx, line in enumerate(text.splitlines(), 1):
@@ -150,4 +157,9 @@ def parse_entity_relation_raw(raw: str) -> ParsedEntityRelation:
 
         errors.append(f"line {idx}: unknown kind '{kind}'")
 
+    monitor = get_current_monitor()
+    if monitor is not None:
+        monitor.observe("entity_relation_parsing.entities", float(len(entities)))
+        monitor.observe("entity_relation_parsing.relations", float(len(relations)))
+        monitor.observe("entity_relation_parsing.parse_errors", float(len(errors)))
     return ParsedEntityRelation(entities=entities, relations=relations, errors=errors)

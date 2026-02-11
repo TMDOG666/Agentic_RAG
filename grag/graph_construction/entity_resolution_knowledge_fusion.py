@@ -30,6 +30,8 @@ import json
 from dataclasses import dataclass
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from grag.monitoring.monitoring_manager import get_current_monitor
+
 from ..config import get_settings
 from ..model.embedding_client import EmbeddingClient
 from ..model.llm_client import LLMClient
@@ -210,14 +212,27 @@ def embed_entities(
     errors: List[str] = []
     texts = [_entity_text_for_vectorization(e) for e in entities]
 
+    monitor = get_current_monitor()
+    if monitor is not None:
+        monitor.observe("fusion.embedding.input_entities", float(len(entities)))
+
     # 注意：本项目要求“只读取配置中的模型”，因此这里不做 sentence-transformers / tfidf 等无关模型的自动 fallback。
     provider = _get_embedding_provider_from_config()
     try:
+        if monitor is not None:
+            with monitor.span("fusion.embedding", provider=provider, n=len(texts)):
+                if embedding_fn is not None:
+                    return embedding_fn(texts, provider), errors
+                client = EmbeddingClient(provider_name=provider)
+                return client.embed_texts(texts), errors
+
         if embedding_fn is not None:
             return embedding_fn(texts, provider), errors
         client = EmbeddingClient(provider_name=provider)
         return client.embed_texts(texts), errors
     except Exception as e:
+        if monitor is not None:
+            monitor.inc("fusion.embedding.errors", 1)
         raise RuntimeError(f"entity embedding failed (provider={provider}): {type(e).__name__}: {e}") from e
 
 
@@ -239,8 +254,21 @@ def cluster_entities(
     if not entities:
         return [], errors
 
+    monitor = get_current_monitor()
+    if monitor is not None:
+        monitor.observe("fusion.clustering.input_entities", float(len(entities)))
+
     method = (method or "").strip().lower()
     if method == "exact_name":
+        if monitor is not None:
+            with monitor.span("fusion.clustering", method=method, min_cluster_size=int(min_cluster_size)):
+                by_name: Dict[str, List[EntityForFusion]] = {}
+                for e in entities:
+                    by_name.setdefault(_normalize_name(e.name), []).append(e)
+                clusters = [EntityCluster(cluster_id=i, members=m) for i, m in enumerate(by_name.values())]
+                monitor.observe("fusion.clustering.output_clusters", float(len(clusters)))
+                return clusters, errors
+
         by_name: Dict[str, List[EntityForFusion]] = {}
         for e in entities:
             by_name.setdefault(_normalize_name(e.name), []).append(e)
@@ -250,7 +278,43 @@ def cluster_entities(
     if method != "hdbscan":
         raise ValueError(f"unsupported clustering method: {method}")
 
-    # hdbscan 是默认且推荐方式：如果缺依赖，给出明确错误，不做悄悄降级。
+    if monitor is not None:
+        with monitor.span("fusion.clustering", method=method, min_cluster_size=int(min_cluster_size)):
+            # hdbscan 是默认且推荐方式：如果缺依赖，给出明确错误，不做悄悄降级。
+            try:
+                import hdbscan  # type: ignore
+            except Exception as e:
+                monitor.inc("fusion.clustering.errors", 1)
+                raise RuntimeError(
+                    "hdbscan is required for clustering method 'hdbscan'. "
+                    "Please install hdbscan or set clustering.method=exact_name for testing. "
+                    f"ImportError: {e}"
+                ) from e
+
+            clusterer = hdbscan.HDBSCAN(min_cluster_size=max(2, int(min_cluster_size)))
+            labels = clusterer.fit_predict(embeddings)
+
+            # labels == -1 表示噪声点；保留为单独 cluster，避免丢信息
+            groups: Dict[int, List[EntityForFusion]] = {}
+            next_noise_id = 10_000_000
+            noise_points = 0
+            for e, lb in zip(entities, labels):
+                lb = int(lb)
+                if lb == -1:
+                    noise_points += 1
+                    groups[next_noise_id] = [e]
+                    next_noise_id += 1
+                else:
+                    groups.setdefault(lb, []).append(e)
+
+            clusters = [
+                EntityCluster(cluster_id=k, members=v) for k, v in sorted(groups.items(), key=lambda x: x[0])
+            ]
+            monitor.observe("fusion.clustering.output_clusters", float(len(clusters)))
+            monitor.observe("fusion.clustering.noise_points", float(noise_points))
+            return clusters, errors
+
+    # no monitor
     try:
         import hdbscan  # type: ignore
     except Exception as e:
@@ -263,7 +327,6 @@ def cluster_entities(
     clusterer = hdbscan.HDBSCAN(min_cluster_size=max(2, int(min_cluster_size)))
     labels = clusterer.fit_predict(embeddings)
 
-    # labels == -1 表示噪声点；保留为单独 cluster，避免丢信息
     groups: Dict[int, List[EntityForFusion]] = {}
     next_noise_id = 10_000_000
     for e, lb in zip(entities, labels):
@@ -353,10 +416,23 @@ async def fuse_one_cluster(
         llm_chat_fn = LLMClient(llm_provider).chat
 
     try:
-        llm_raw = await asyncio.to_thread(llm_chat_fn, prompt)
+        monitor = get_current_monitor()
+        if monitor is not None:
+            monitor.inc("fusion.llm_calls", 1)
+            with monitor.span("fusion.llm_fuse_one_cluster", cluster_id=cluster.cluster_id, size=len(cluster.members)):
+                llm_raw = await asyncio.to_thread(llm_chat_fn, prompt)
+        else:
+            llm_raw = await asyncio.to_thread(llm_chat_fn, prompt)
         fused, parse_errors = _parse_fused_entities_json(llm_raw)
+        if monitor is not None:
+            monitor.observe("fusion.llm_fused_entities", float(len(fused)))
+            if parse_errors:
+                monitor.observe("fusion.llm_parse_errors", float(len(parse_errors)))
         return cluster, fused, parse_errors
     except Exception as e:
+        monitor = get_current_monitor()
+        if monitor is not None:
+            monitor.inc("fusion.llm_errors", 1)
         return cluster, [], [f"LLM fusion failed: {type(e).__name__}: {e}"]
 
 
@@ -372,6 +448,7 @@ async def fuse_clusters(
     errors: List[str] = []
     if not clusters:
         return [], errors
+
     if bench_num <= 0:
         bench_num = 1
 
@@ -389,6 +466,12 @@ async def fuse_clusters(
         fused_all.extend(fused)
         for er in errs:
             errors.append(f"cluster {cluster.cluster_id}: {er}")
+
+    monitor = get_current_monitor()
+    if monitor is not None:
+        monitor.observe("fusion.llm_clusters", float(len(clusters)))
+        monitor.observe("fusion.llm_total_fused_entities", float(len(fused_all)))
+        monitor.observe("fusion.llm_total_errors", float(len(errors)))
     return fused_all, errors
 
 
@@ -470,6 +553,7 @@ async def resolve_and_fuse_intra_document(
 
     errors: List[str] = []
     if not entities:
+
         return IntraDocumentFusionResult(
             fused_entities=[],
             rewritten_relations=list(relations),
@@ -477,6 +561,11 @@ async def resolve_and_fuse_intra_document(
             clusters=[],
             errors=["no entities provided"],
         )
+
+    monitor = get_current_monitor()
+    if monitor is not None:
+        monitor.observe("fusion.input_entities", float(len(entities)))
+        monitor.observe("fusion.input_relations", float(len(relations)))
 
     # Step 2) 向量化
     embeddings, emb_errors = embed_entities(entities, embedding_fn=embedding_fn)
@@ -500,18 +589,41 @@ async def resolve_and_fuse_intra_document(
     )
     errors.extend(cluster_errors)
 
+    if monitor is not None:
+        monitor.observe("fusion.clusters", float(len(clusters)))
+
     # Step 4) LLM 知识融合
-    fused_entities, fuse_errors = await fuse_clusters(
-        clusters,
-        llm_chat_fn=llm_chat_fn,
-        llm_provider=str(fusion_llm_provider) if fusion_llm_provider else None,
-        bench_num=int(fusion_bench_num) if fusion_bench_num else 4,
-    )
+    if monitor is not None:
+        with monitor.span("fusion.llm_fusion", clusters=len(clusters), bench_num=int(fusion_bench_num)):
+            fused_entities, fuse_errors = await fuse_clusters(
+                clusters,
+                llm_chat_fn=llm_chat_fn,
+                llm_provider=str(fusion_llm_provider) if fusion_llm_provider else None,
+                bench_num=int(fusion_bench_num) if fusion_bench_num else 4,
+            )
+    else:
+        fused_entities, fuse_errors = await fuse_clusters(
+            clusters,
+            llm_chat_fn=llm_chat_fn,
+            llm_provider=str(fusion_llm_provider) if fusion_llm_provider else None,
+            bench_num=int(fusion_bench_num) if fusion_bench_num else 4,
+        )
     errors.extend(fuse_errors)
 
     # Step 5) 关系重定向
-    alias_map = build_alias_to_canonical_map(fused_entities)
-    rewritten_relations = rewrite_relations_with_alias_map(relations, alias_map)
+    if monitor is not None:
+        with monitor.span("fusion.rewrite_relations"):
+            alias_map = build_alias_to_canonical_map(fused_entities)
+            rewritten_relations = rewrite_relations_with_alias_map(relations, alias_map)
+    else:
+        alias_map = build_alias_to_canonical_map(fused_entities)
+        rewritten_relations = rewrite_relations_with_alias_map(relations, alias_map)
+
+    if monitor is not None:
+        monitor.observe("fusion.alias_map", float(len(alias_map)))
+        monitor.observe("fusion.output_fused_entities", float(len(fused_entities)))
+        monitor.observe("fusion.output_rewritten_relations", float(len(rewritten_relations)))
+        monitor.observe("fusion.output_errors", float(len(errors)))
 
     return IntraDocumentFusionResult(
         fused_entities=fused_entities,

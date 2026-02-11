@@ -5,6 +5,8 @@ import uuid
 from dataclasses import dataclass
 from typing import Callable, List, Optional
 
+from grag.monitoring.monitoring_manager import MonitoringManager, use_monitor
+
 from .chunker import SemanticChunker
 from .coreference_resolver import CoreferenceResolver, DocumentWithCoreferenceResolution
 from .entity_relation_extractor import Chunk, ChunkWithEntityRelationRaw, EntityRelationExtractor
@@ -124,65 +126,164 @@ class GraphConstructionManager:
         5) 图谱构建（占位）
         """
 
-        # Step 1) 全文指代消解
-        coref_resolver = CoreferenceResolver(llm_chat_fn=self._coref_llm_chat_fn)
-        coref_result = asyncio.run(coref_resolver.resolve_text(text))
+        monitor = MonitoringManager(doc_name=doc_name, base_attrs={"doc_time": doc_time})
 
-        # Step 2) 分块：对“消解后的全文”分块
-        chunker = SemanticChunker()
-        chunk_texts = chunker.chunk(coref_result.resolved_text)
+        with use_monitor(monitor):
+            monitor.inc("graph_construction.run", 1)
 
-        chunks: List[Chunk] = []
-        for i, t in enumerate(chunk_texts, 1):
-            # chunk_id 这里按 doc_name + 序号生成，便于后续溯源。
-            chunks.append(Chunk(chunk_id=f"{doc_name}::chunk_{i}_{uuid.uuid4().hex}", text=t))
+            with monitor.span("coreference_resolution"):
+                coref_resolver = CoreferenceResolver(llm_chat_fn=self._coref_llm_chat_fn)
+                coref_result = asyncio.run(coref_resolver.resolve_text(text))
+                if coref_result.error:
+                    monitor.inc("coreference_resolution.errors", 1)
 
-        # Step 3) 实体关系抽取（extractor 内部会根据 bench_num 控并发）
-        extractor = EntityRelationExtractor(llm_chat_fn=self._entity_relation_llm_chat_fn)
-        extracted: List[ChunkWithEntityRelationRaw] = asyncio.run(extractor.extract_many(chunks))
+            monitor.record_result(
+                "coreference_resolution",
+                {
+                    "error": coref_result.error,
+                    "coreference_raw_chars": len(coref_result.coreference_raw or ""),
+                    "resolved_text_preview": (coref_result.resolved_text or "")[:500],
+                },
+            )
 
-        parsed_chunks: List[ChunkExtractionParsed] = []
-        for r in extracted:
-            # Step 4) raw 解析为结构化对象
-            parsed = parse_entity_relation_raw(r.entity_relation_raw)
-            parsed_chunks.append(
-                ChunkExtractionParsed(
-                    chunk_id=r.chunk_id,
-                    text=r.text,
-                    entity_relation_raw=r.entity_relation_raw,
-                    parsed=parsed,
-                    error=r.error,
+            with monitor.span("chunking"):
+                chunker = SemanticChunker()
+                chunk_texts = chunker.chunk(coref_result.resolved_text)
+                monitor.observe("chunking.chunks", float(len(chunk_texts)))
+
+            monitor.record_result(
+                "chunking",
+                {
+                    "chunks": len(chunk_texts),
+                    "chunk_chars": [len(t) for t in chunk_texts[:50]],
+                    "first_chunk_preview": (chunk_texts[0] if chunk_texts else "")[:500],
+                },
+            )
+
+            chunks: List[Chunk] = []
+            for i, t in enumerate(chunk_texts, 1):
+                chunks.append(Chunk(chunk_id=f"{doc_name}::chunk_{i}_{uuid.uuid4().hex}", text=t))
+
+            with monitor.span("entity_relation_extraction", chunks=len(chunks)):
+                extractor = EntityRelationExtractor(llm_chat_fn=self._entity_relation_llm_chat_fn)
+                extracted: List[ChunkWithEntityRelationRaw] = asyncio.run(extractor.extract_many(chunks))
+                monitor.observe("entity_relation_extraction.results", float(len(extracted)))
+                monitor.observe(
+                    "entity_relation_extraction.chunk_errors",
+                    float(sum(1 for r in extracted if r.error)),
                 )
+
+            monitor.record_result(
+                "entity_relation_extraction",
+                {
+                    "chunks": len(extracted),
+                    "chunk_errors": sum(1 for r in extracted if r.error),
+                    "samples": [
+                        {
+                            "chunk_id": r.chunk_id,
+                            "error": r.error,
+                            "raw_preview": (r.entity_relation_raw or "")[:500],
+                        }
+                        for r in extracted[:10]
+                    ],
+                },
             )
 
-        # Step 5) 文档内部：实体统一 + 知识融合 + 关系重定向
-        #
-        # 说明：
-        # - 这一步不改动 chunk 级输出（保留原始抽取结果，便于追溯）
-        # - 融合后的“文档级实体/关系”放入 result.graph 字段（当前仍是占位容器）
-        fusion_input_entities = collect_entities_from_chunks(
-            (c.chunk_id, c.parsed.entities) for c in parsed_chunks
-        )
-        fusion_input_relations = [rel for c in parsed_chunks for rel in c.parsed.relations]
+            parsed_chunks: List[ChunkExtractionParsed] = []
+            with monitor.span("entity_relation_parsing"):
+                for r in extracted:
+                    parsed = parse_entity_relation_raw(r.entity_relation_raw)
+                    monitor.observe("entity_relation_parsing.entities", float(len(parsed.entities)))
+                    monitor.observe("entity_relation_parsing.relations", float(len(parsed.relations)))
+                    monitor.observe("entity_relation_parsing.parse_errors", float(len(parsed.errors)))
+                    parsed_chunks.append(
+                        ChunkExtractionParsed(
+                            chunk_id=r.chunk_id,
+                            text=r.text,
+                            entity_relation_raw=r.entity_relation_raw,
+                            parsed=parsed,
+                            error=r.error,
+                        )
+                    )
 
-        fusion_result: IntraDocumentFusionResult = asyncio.run(
-            resolve_and_fuse_intra_document(
-                entities=fusion_input_entities,
-                relations=fusion_input_relations,
-                llm_chat_fn=self._fusion_llm_chat_fn,
-                embedding_fn=self._embedding_fn,
+            monitor.record_result(
+                "entity_relation_parsing",
+                {
+                    "chunks": len(parsed_chunks),
+                    "total_entities": sum(len(c.parsed.entities) for c in parsed_chunks),
+                    "total_relations": sum(len(c.parsed.relations) for c in parsed_chunks),
+                    "total_parse_errors": sum(len(c.parsed.errors) for c in parsed_chunks),
+                    "samples": [
+                        {
+                            "chunk_id": c.chunk_id,
+                            "entities": [e.name for e in c.parsed.entities[:20]],
+                            "relations": [
+                                {
+                                    "s": r.subject,
+                                    "o": r.object,
+                                    "t": r.relation_type,
+                                    "c": r.confidence,
+                                }
+                                for r in c.parsed.relations[:20]
+                            ],
+                            "errors": c.parsed.errors[:20],
+                        }
+                        for c in parsed_chunks[:5]
+                    ],
+                },
             )
-        )
 
-        graph_placeholder = {
-            "intra_document_fusion": fusion_result,
-        }
+            fusion_input_entities = collect_entities_from_chunks(
+                (c.chunk_id, c.parsed.entities) for c in parsed_chunks
+            )
+            fusion_input_relations = [rel for c in parsed_chunks for rel in c.parsed.relations]
+            monitor.observe("fusion.input_entities", float(len(fusion_input_entities)))
+            monitor.observe("fusion.input_relations", float(len(fusion_input_relations)))
 
-        return GraphConstructionResult(
-            doc_name=doc_name,
-            doc_time=doc_time,
-            original_text=text,
-            coreference=coref_result,
-            chunks=parsed_chunks,
-            graph=graph_placeholder,
-        )
+            with monitor.span("intra_document_fusion"):
+                fusion_result: IntraDocumentFusionResult = asyncio.run(
+                    resolve_and_fuse_intra_document(
+                        entities=fusion_input_entities,
+                        relations=fusion_input_relations,
+                        llm_chat_fn=self._fusion_llm_chat_fn,
+                        embedding_fn=self._embedding_fn,
+                    )
+                )
+                monitor.observe("fusion.fused_entities", float(len(fusion_result.fused_entities)))
+                monitor.observe("fusion.rewritten_relations", float(len(fusion_result.rewritten_relations)))
+                monitor.observe("fusion.errors", float(len(fusion_result.errors)))
+
+            monitor.record_result(
+                "intra_document_fusion",
+                {
+                    "clusters": len(fusion_result.clusters),
+                    "fused_entities": [fe.canonical_name for fe in fusion_result.fused_entities[:50]],
+                    "alias_map_size": len(fusion_result.alias_to_canonical),
+                    "rewritten_relations": [
+                        {
+                            "s": r.subject,
+                            "o": r.object,
+                            "t": r.relation_type,
+                            "c": r.confidence,
+                        }
+                        for r in fusion_result.rewritten_relations[:50]
+                    ],
+                    "errors": fusion_result.errors[:50],
+                },
+            )
+
+            graph_placeholder = {
+                "intra_document_fusion": fusion_result,
+            }
+
+            result = GraphConstructionResult(
+                doc_name=doc_name,
+                doc_time=doc_time,
+                original_text=text,
+                coreference=coref_result,
+                chunks=parsed_chunks,
+                graph=graph_placeholder,
+            )
+
+            monitor.export_json()
+            return result

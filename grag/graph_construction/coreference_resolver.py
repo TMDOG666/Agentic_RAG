@@ -4,6 +4,8 @@ import random
 from dataclasses import dataclass
 from typing import Any, Callable, List, Optional
 
+from grag.monitoring.monitoring_manager import get_current_monitor
+
 from ..config import get_settings
 from ..model.llm_client import LLMClient
 
@@ -143,18 +145,38 @@ class CoreferenceResolver:
 
     async def _call_llm_with_retries(self, prompt: str) -> str:
         """对单次 LLM 调用做重试封装（指数退避 + 少量抖动）。"""
+        monitor = get_current_monitor()
+        if monitor is not None:
+            monitor.inc("coreference_resolution.llm_calls", 1)
         last_exc: Optional[BaseException] = None
         for attempt in range(self.max_retries):
             try:
-                return await asyncio.to_thread(self._llm_chat_fn, prompt)
+                if monitor is not None:
+                    monitor.inc("coreference_resolution.llm_attempts", 1)
+                with (monitor.span("coreference_resolution.llm_call") if monitor is not None else _null_span()):
+                    return await asyncio.to_thread(self._llm_chat_fn, prompt)
             except Exception as e:
                 last_exc = e
+                if monitor is not None:
+                    monitor.inc("coreference_resolution.llm_errors", 1)
                 if attempt >= self.max_retries - 1:
                     break
+                if monitor is not None:
+                    monitor.inc("coreference_resolution.llm_retries", 1)
                 sleep_s = self.base_sleep_seconds * (2**attempt)
                 sleep_s = sleep_s + random.random() * 0.2 * sleep_s
                 await asyncio.sleep(sleep_s)
         raise RuntimeError(str(last_exc) if last_exc else "LLM call failed")
+
+    @staticmethod
+    def _null_span():
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _cm():
+            yield
+
+        return _cm()
 
     @staticmethod
     def _parse_json_list(raw: str) -> List[dict]:
@@ -230,6 +252,9 @@ class CoreferenceResolver:
             raw = await self._call_llm_with_retries(prompt)
             raw = (raw or "").strip()
             items = self._parse_json_list(raw)
+            monitor = get_current_monitor()
+            if monitor is not None:
+                monitor.observe("coreference_resolution.replacements", float(len(items)))
             resolved_text = self._apply_replacements(text, items)
             return DocumentWithCoreferenceResolution(
                 text=text,
@@ -238,6 +263,9 @@ class CoreferenceResolver:
                 error=None,
             )
         except Exception as e:
+            monitor = get_current_monitor()
+            if monitor is not None:
+                monitor.inc("coreference_resolution.exceptions", 1)
             return DocumentWithCoreferenceResolution(
                 text=text,
                 coreference_raw="",

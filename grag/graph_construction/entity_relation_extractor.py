@@ -3,6 +3,8 @@ import random
 from dataclasses import dataclass
 from typing import Any, Callable, List, Optional
 
+from grag.monitoring.monitoring_manager import get_current_monitor
+
 from ..config import get_settings
 from ..model.llm_client import LLMClient
 
@@ -191,22 +193,47 @@ class EntityRelationExtractor:
 
     async def _call_llm_with_retries(self, prompt: str) -> str:
         """对单次 LLM 调用做重试封装（指数退避 + 少量抖动）。"""
+        monitor = get_current_monitor()
+        if monitor is not None:
+            monitor.inc("entity_relation_extraction.llm_calls", 1)
         last_exc: Optional[BaseException] = None
         for attempt in range(self.max_retries):
             try:
-                return await asyncio.to_thread(self._llm_chat_fn, prompt)
+                if monitor is not None:
+                    monitor.inc("entity_relation_extraction.llm_attempts", 1)
+                with (
+                    monitor.span("entity_relation_extraction.llm_call") if monitor is not None else _null_span()
+                ):
+                    return await asyncio.to_thread(self._llm_chat_fn, prompt)
             except Exception as e:
                 last_exc = e
+                if monitor is not None:
+                    monitor.inc("entity_relation_extraction.llm_errors", 1)
                 if attempt >= self.max_retries - 1:
                     break
+                if monitor is not None:
+                    monitor.inc("entity_relation_extraction.llm_retries", 1)
                 sleep_s = self.base_sleep_seconds * (2**attempt)
                 sleep_s = sleep_s + random.random() * 0.2 * sleep_s
                 await asyncio.sleep(sleep_s)
         raise RuntimeError(str(last_exc) if last_exc else "LLM call failed")
 
+    @staticmethod
+    def _null_span():
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _cm():
+            yield
+
+        return _cm()
+
     async def extract_one(self, chunk: Chunk) -> ChunkWithEntityRelationRaw:
         """抽取单个 chunk（并发受 semaphore 控制）。"""
         if not self.enabled:
+            monitor = get_current_monitor()
+            if monitor is not None:
+                monitor.inc("entity_relation_extraction.disabled", 1)
             return ChunkWithEntityRelationRaw(
                 chunk_id=chunk.chunk_id,
                 text=chunk.text,
@@ -219,6 +246,10 @@ class EntityRelationExtractor:
             try:
                 raw = await self._call_llm_with_retries(prompt)
                 raw = (raw or "").strip()
+                monitor = get_current_monitor()
+                if monitor is not None:
+                    monitor.inc("entity_relation_extraction.chunk_success", 1)
+                    monitor.observe("entity_relation_extraction.raw_chars", float(len(raw)))
                 return ChunkWithEntityRelationRaw(
                     chunk_id=chunk.chunk_id,
                     text=chunk.text,
@@ -226,6 +257,9 @@ class EntityRelationExtractor:
                     error=None,
                 )
             except Exception as e:
+                monitor = get_current_monitor()
+                if monitor is not None:
+                    monitor.inc("entity_relation_extraction.chunk_failed", 1)
                 return ChunkWithEntityRelationRaw(
                     chunk_id=chunk.chunk_id,
                     text=chunk.text,

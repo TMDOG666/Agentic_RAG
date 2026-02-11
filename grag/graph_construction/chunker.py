@@ -17,6 +17,7 @@ from __future__ import annotations
 import re
 from types import SimpleNamespace
 from typing import Callable, List, Optional, Sequence, Tuple
+from grag.monitoring.monitoring_manager import get_current_monitor
 from ..config import get_settings
 
 def _default_token_counter(text: str) -> int:
@@ -125,16 +126,33 @@ class SemanticChunker:
         text = (text or "").replace("\r\n", "\n").replace("\r", "\n")
         text = text.strip("\n")
         if not text.strip():
+            monitor = get_current_monitor()
+            if monitor is not None:
+                monitor.observe("chunking.input_chars", 0.0)
+                monitor.observe("chunking.output_chunks", 0.0)
             return []
+
+        monitor = get_current_monitor()
+        if monitor is not None:
+            monitor.observe("chunking.input_chars", float(len(text)))
 
         if not self._has_any_heading(text):
             if self.config.enable_fallback:
-                return self._fallback_chunk(text)
-            return [text.strip()] if text.strip() else []
+                out = self._fallback_chunk(text)
+                if monitor is not None:
+                    monitor.observe("chunking.output_chunks", float(len(out)))
+                return out
+            out = [text.strip()] if text.strip() else []
+            if monitor is not None:
+                monitor.observe("chunking.output_chunks", float(len(out)))
+            return out
 
         raw = self._recursive_split(text)
         raw = [c.strip("\n") for c in raw if c and c.strip()]
-        return self._greedy_merge(raw)
+        out = self._greedy_merge(raw)
+        if monitor is not None:
+            monitor.observe("chunking.output_chunks", float(len(out)))
+        return out
 
     def _has_any_heading(self, text: str) -> bool:
         """判断文本中是否存在可识别的结构化标题。"""
