@@ -1,4 +1,4 @@
-"""grag.data
+"""grag.data_client
 
 数据层（Data Layer）
 
@@ -9,7 +9,7 @@
 from .neo4j_client import Neo4jClient, get_neo4j_client
 from .milvus_client import MilvusClient, get_milvus_client
 from .postgres_client import PostgresClient, get_postgres_client
-from .data_manager import DataManager, get_data_manager
+from .data_client_manager import DataManager, get_data_manager
 
 __all__ = [
     "Neo4jClient",

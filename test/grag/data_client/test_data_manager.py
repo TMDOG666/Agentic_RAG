@@ -7,7 +7,7 @@ project_root = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from grag.config import initialize_config
-from grag.data import (
+from grag.data_client import (
     DataManager,
     get_data_manager,
     Neo4jClient,

@@ -1,4 +1,4 @@
-"""grag.data.data_manager
+"""grag.data_client.data_client_manager
 
 数据层管理器
 
@@ -14,10 +14,10 @@
 
 from typing import Optional, Dict, Any
 
-from ..config import get_grag_settings, ProviderType
-from .neo4j_client import Neo4jClient, get_neo4j_client
-from .milvus_client import MilvusClient, get_milvus_client
-from .postgres_client import PostgresClient, get_postgres_client
+from ..config import get_grag_settings
+from .neo4j_client import Neo4jClient
+from .milvus_client import MilvusClient
+from .postgres_client import PostgresClient
 
 
 class DataManager:

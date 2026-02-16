@@ -7,7 +7,7 @@ project_root = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from grag.config import initialize_config
-from grag.data.milvus_client import MilvusClient, get_milvus_client
+from grag.data_client.milvus_client import MilvusClient, get_milvus_client
 
 
 def _ensure_config():

@@ -2,5 +2,5 @@ result
 __pycache__
 .cursor/skills/.registry/
 .env
-test_data/
-data/
+/test/grag/graph_construction/test_data/
+/data/

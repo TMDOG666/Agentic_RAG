@@ -11,6 +11,7 @@ from .chunker import SemanticChunker
 from .coreference_resolver import CoreferenceResolver, DocumentWithCoreferenceResolution
 from .entity_relation_extractor import Chunk, ChunkWithEntityRelationRaw, EntityRelationExtractor
 from .entity_relation_parser import ParsedEntityRelation, parse_entity_relation_raw
+
 from .entity_resolution_knowledge_fusion import (
     IntraDocumentFusionResult,
     collect_entities_from_chunks,
@@ -23,13 +24,19 @@ from .entity_resolution_knowledge_fusion import (
 图构建流程编排器（Manager / Orchestrator）。
 
 职责：
-- 接收外部输入（文档名称、时间、文本内容）
-- 串联图构建的前置流水线：
-    1) 全文指代消解
-    2) 分块
-    3) 实体关系抽取
-    4) raw 结果解析为结构化对象
-    5) 图谱构建（当前留空）
+- 仅负责“流程编排”（Orchestration）：
+  - 指代消解 coreference
+  - 分块 chunking
+  - 实体/关系抽取 extraction
+  - 抽取结果解析 parsing
+  - 文档内实体融合与关系重写 fusion
+
+非职责（不在本模块实现）：
+- 构建“可入库资产”（Document/Chunk/Embedding/Entity/Relation 的存储数据结构）
+- 计算 chunk embedding
+- 调用 storage/数据库进行落库
+
+这些与“持久化/资产构建”相关的逻辑，应由 `grag.graph_construction.graph_builder.GraphBuilder` 承担。
 
 设计原则：
 - “流程编排”与“具体能力模块”解耦：
@@ -107,31 +114,39 @@ class GraphConstructionManager:
         self._fusion_llm_chat_fn = fusion_llm_chat_fn
         self._embedding_fn = embedding_fn
 
-    def run(self, text: str, doc_time: str, doc_name: str) -> GraphConstructionResult:
+    def run(
+        self,
+        text: str,
+        doc_time: str,
+        doc_name: str,
+        *,
+        group_id: str = "default",
+        doc_id: Optional[str] = None,
+    ) -> GraphConstructionResult:
         """执行图构建前置流水线。
 
         Args:
             text: 文档全文
             doc_time: 文档时间（建议 ISO8601 字符串；此处作为元数据透传）
             doc_name: 文档名称/唯一标识
-
-        Returns:
-            GraphConstructionResult: 包含各步骤产物的结构化结果。
-
-        流程：
-        1) 全文指代消解（CoreferenceResolver.resolve_text）
-        2) 对消解后的全文进行分块（SemanticChunker.chunk）
-        3) 对 chunks 做实体关系抽取（EntityRelationExtractor.extract_many）
-        4) 对每个 chunk 的 raw 输出做解析（parse_entity_relation_raw）
-        5) 图谱构建（占位）
         """
 
-        monitor = MonitoringManager(doc_name=doc_name, base_attrs={"doc_time": doc_time})
+        # doc_id 用于幂等、隔离与可追踪：
+        # - GraphConstructionManager 会在 chunk_id 中引用它
+        # - GraphBuilder 会使用它来构建落库主键/唯一键
+        if doc_id is None:
+            doc_id = uuid.uuid4().hex
+
+        monitor = MonitoringManager(
+            doc_name=doc_name,
+            base_attrs={"doc_time": doc_time, "group_id": group_id, "doc_id": doc_id},
+        )
 
         with use_monitor(monitor):
             monitor.inc("graph_construction.run", 1)
 
             with monitor.span("coreference_resolution"):
+                # 1) 全文指代消解：减少代词/省略带来的歧义，提升后续抽取质量
                 coref_resolver = CoreferenceResolver(llm_chat_fn=self._coref_llm_chat_fn)
                 coref_result = asyncio.run(coref_resolver.resolve_text(text))
                 if coref_result.error:
@@ -147,6 +162,7 @@ class GraphConstructionManager:
             )
 
             with monitor.span("chunking"):
+                # 2) 分块：将长文拆成适合 LLM 的 chunk
                 chunker = SemanticChunker()
                 chunk_texts = chunker.chunk(coref_result.resolved_text)
                 monitor.observe("chunking.chunks", float(len(chunk_texts)))
@@ -162,12 +178,17 @@ class GraphConstructionManager:
 
             chunks: List[Chunk] = []
             for i, t in enumerate(chunk_texts, 1):
-                chunks.append(Chunk(chunk_id=f"{doc_name}::chunk_{i}_{uuid.uuid4().hex}", text=t))
+                # chunk_id 采用“doc_id::chunk_{i}”的稳定格式：
+                # - 有利于下游 embedding / 入库时做幂等
+                # - 同一 doc_id 下 chunk 序号稳定可复现
+                chunks.append(Chunk(chunk_id=f"{doc_id}::chunk_{i}", text=t))
 
             with monitor.span("entity_relation_extraction", chunks=len(chunks)):
+                # 3) 实体/关系抽取：逐 chunk 调 LLM 产出 raw 文本
                 extractor = EntityRelationExtractor(llm_chat_fn=self._entity_relation_llm_chat_fn)
                 extracted: List[ChunkWithEntityRelationRaw] = asyncio.run(extractor.extract_many(chunks))
                 monitor.observe("entity_relation_extraction.results", float(len(extracted)))
+
                 monitor.observe(
                     "entity_relation_extraction.chunk_errors",
                     float(sum(1 for r in extracted if r.error)),
@@ -191,11 +212,13 @@ class GraphConstructionManager:
 
             parsed_chunks: List[ChunkExtractionParsed] = []
             with monitor.span("entity_relation_parsing"):
+                # 4) 解析 raw 抽取文本为结构化实体/关系对象
                 for r in extracted:
                     parsed = parse_entity_relation_raw(r.entity_relation_raw)
                     monitor.observe("entity_relation_parsing.entities", float(len(parsed.entities)))
                     monitor.observe("entity_relation_parsing.relations", float(len(parsed.relations)))
                     monitor.observe("entity_relation_parsing.parse_errors", float(len(parsed.errors)))
+
                     parsed_chunks.append(
                         ChunkExtractionParsed(
                             chunk_id=r.chunk_id,
@@ -241,6 +264,9 @@ class GraphConstructionManager:
             monitor.observe("fusion.input_relations", float(len(fusion_input_relations)))
 
             with monitor.span("intra_document_fusion"):
+                # 5) 文档内融合：
+                # - 对多 chunk 抽取出的“同名/近义实体”做聚类与统一
+                # - 并将 relations 重写为 canonical entity
                 fusion_result: IntraDocumentFusionResult = asyncio.run(
                     resolve_and_fuse_intra_document(
                         entities=fusion_input_entities,
@@ -249,6 +275,7 @@ class GraphConstructionManager:
                         embedding_fn=self._embedding_fn,
                     )
                 )
+
                 monitor.observe("fusion.fused_entities", float(len(fusion_result.fused_entities)))
                 monitor.observe("fusion.rewritten_relations", float(len(fusion_result.rewritten_relations)))
                 monitor.observe("fusion.errors", float(len(fusion_result.errors)))

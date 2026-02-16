@@ -7,7 +7,7 @@ project_root = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from grag.config import initialize_config
-from grag.data.postgres_client import PostgresClient, get_postgres_client
+from grag.data_client.postgres_client import PostgresClient, get_postgres_client
 
 
 def _ensure_config():

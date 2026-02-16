@@ -94,10 +94,15 @@ class PostgresClient:
             psycopg2.connection: 数据库连接实例
         """
         psycopg2 = _get_psycopg2()
+        config = self._get_config()
         params = self._get_connect_params()
         # 只有在配置了 password_env 但环境变量未设置时才报错
         # 如果直接配置了 password 或者没有配置任何密码，则允许继续
-        if (not params.get("password")) and getattr(config, "password_env", None) and not os.environ.get(config.password_env):
+        if (
+            (not params.get("password"))
+            and getattr(config, "password_env", None)
+            and not os.environ.get(config.password_env)
+        ):
             raise RuntimeError(
                 f"未检测到 PostgreSQL 密码环境变量 {config.password_env}，请先设置后再连接。"
             )
