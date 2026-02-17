@@ -5,6 +5,7 @@ from typing import Optional, Sequence
 from grag.data_client import DataManager, get_data_manager
 
 from .protocol import GraphStorage
+from .repositories import MilvusVectorRepository, Neo4jGraphRepository, PostgresGraphRepository
 from .types import (
     ChunkEmbeddingRecord,
     ChunkRecord,
@@ -14,9 +15,46 @@ from .types import (
 )
 
 
+"""grag.storage.storage_impl
+
+Storage 层的具体实现（Implementation）。
+
+本模块提供 `DataClientGraphStorage`：
+- 通过 `grag.data_client.DataManager` 获取三类数据库 client
+- 组合三个 repository：
+  - PostgresGraphRepository：文档/Chunk 文本/实体元信息
+  - MilvusVectorRepository：Chunk embedding
+  - Neo4jGraphRepository：图结构（实体节点 + 关系边）
+
+这样上层（GraphBuilder）只依赖 `GraphStorage` 接口，不直接依赖任何数据库 client。
+"""
+
+
 class DataClientGraphStorage(GraphStorage):
-    def __init__(self, *, data_manager: Optional[DataManager] = None) -> None:
+    """基于 DataManager 的 GraphStorage 实现。
+
+    单一职责：
+    - 将 GraphBuilder 传入的 records 分发给三个 repository 完成落库。
+
+    失败语义：
+    - 当前实现为“尽快失败”（fail-fast）：任何一个 repository 抛异常将向上抛出。
+    - 注意：这里没有跨库分布式事务；因此出现部分库写入成功、部分失败的情况是可能的。
+      如果需要强一致性，应在上层引入幂等重试/补偿机制，或将写入收敛到同一事务系统。
+    """
+
+    def __init__(
+        self,
+        *,
+        data_manager: Optional[DataManager] = None,
+        milvus_upsert_strategy: str = "insert_only",
+    ) -> None:
         self._data_manager = data_manager or get_data_manager()
+        self._pg_repo = PostgresGraphRepository(self._data_manager.get_postgres_client())
+        self._milvus_repo = MilvusVectorRepository(
+            self._data_manager.get_milvus_client(),
+            upsert_strategy=milvus_upsert_strategy,
+        )
+        self._neo4j_repo = Neo4jGraphRepository(self._data_manager.get_neo4j_client())
 
     def save_document(
         self,
@@ -27,18 +65,31 @@ class DataClientGraphStorage(GraphStorage):
         entities: Sequence[GraphEntityRecord],
         relations: Sequence[GraphRelationRecord],
     ) -> None:
-        pg = self._data_manager.get_postgres_client()
-        milvus = self._data_manager.get_milvus_client()
-        neo4j = self._data_manager.get_neo4j_client()
+        """落库单篇文档对应的全部资产。
 
-        saver_pg = getattr(pg, "save_document", None)
-        if callable(saver_pg):
-            saver_pg(document=document, chunks=chunks, entities=entities)
+        输入来自 GraphBuilder（已经完成：chunk_id 对齐、entity/relation canonical 化、embedding 计算）。
 
-        saver_milvus = getattr(milvus, "save_embeddings", None)
-        if callable(saver_milvus):
-            saver_milvus(document=document, embeddings=embeddings)
+        写入顺序（最小可用）：
+        1) Postgres：document / chunks / entities
+        2) Milvus：chunk embeddings
+        3) Neo4j：document / entities / relations
 
-        saver_neo4j = getattr(neo4j, "save_graph", None)
-        if callable(saver_neo4j):
-            saver_neo4j(document=document, entities=entities, relations=relations)
+        说明：
+        - Postgres 与 Neo4j 都会写 Document/Entity，但目的不同：
+          - Postgres：便于检索/回溯/审计（结构化元信息）
+          - Neo4j：便于图查询与图推理
+        """
+        self._pg_repo.upsert_document_and_chunks(
+            document=document,
+            chunks=chunks,
+            entities=entities,
+        )
+        self._milvus_repo.upsert_chunk_embeddings(
+            document=document,
+            embeddings=embeddings,
+        )
+        self._neo4j_repo.upsert_graph(
+            document=document,
+            entities=entities,
+            relations=relations,
+        )
