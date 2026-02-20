@@ -1,12 +1,6 @@
 """测试设置管理 (Settings)"""
 
 import os
-import sys
-from pathlib import Path
-
-# 添加项目根目录到路径
-project_root = Path(__file__).parent.parent.parent.parent
-sys.path.insert(0, str(project_root))
 
 from grag.config.settings import (
     GraphRAGSettings,
@@ -252,44 +246,3 @@ class TestSettings:
         
         print(f"✅ 全局设置获取成功")
         print(f"   LLM 提供商: {settings.llm_provider}")
-
-
-def run_tests():
-    """运行所有测试"""
-    print("\n" + "="*60)
-    print("开始测试 Settings 模块")
-    print("="*60)
-    
-    # 创建测试实例
-    test_settings = TestSettings()
-    
-    try:
-        test_settings.test_create_settings_from_config()
-        test_settings.test_settings_attributes()
-        test_settings.test_llm_provider_config()
-        test_settings.test_embedding_provider_config()
-        test_settings.test_vector_db_config()
-        test_settings.test_graph_db_config()
-        test_settings.test_relational_db_config()
-        test_settings.test_system_config()
-        test_settings.test_preprocessing_config()
-        test_settings.test_graph_construction_config()
-        test_settings.test_retrieval_config()
-        test_settings.test_get_settings_function()
-        
-        print("\n" + "="*60)
-        print("✅ 所有测试通过！")
-        print("="*60)
-        
-    except AssertionError as e:
-        print(f"\n❌ 测试失败: {e}")
-        raise
-    except Exception as e:
-        print(f"\n❌ 测试出错: {e}")
-        import traceback
-        traceback.print_exc()
-        raise
-
-
-if __name__ == "__main__":
-    run_tests()

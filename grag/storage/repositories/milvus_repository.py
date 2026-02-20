@@ -19,6 +19,7 @@ Milvus 向量存储仓储层（Repository）。
 - Collection schema（最小可用）：
   - pk: 主键，使用 "{group_id}:{chunk_id}"，便于跨 group 隔离且可幂等覆盖策略扩展
   - group_id/doc_id/chunk_id: 便于过滤与回溯
+  - doc_time: 文档时间（字符串），用于向量检索时做时间过滤（例如只搜最近一周）
   - embedding: FLOAT_VECTOR，dim 由首次写入时决定
 
 - Index：
@@ -88,6 +89,22 @@ class MilvusVectorRepository:
 
         name = self._collection_name()
         if pymilvus.utility.has_collection(name, using=self._client._alias):
+            # 兼容性说明：
+            # - 旧版本 collection 可能没有 doc_time 字段。
+            # - Milvus 不支持在不重建 collection 的情况下“在线新增字段”。
+            # - 为了保证按时间过滤的功能可用，这里检测到缺字段时直接报错，提示用户 drop/recreate。
+            col = pymilvus.Collection(name=name, using=self._client._alias)
+            try:
+                fields = [f.name for f in getattr(col.schema, "fields", [])]
+            except Exception:
+                fields = []
+
+            if "doc_time" not in set(fields):
+                raise RuntimeError(
+                    "Milvus collection schema is missing required field 'doc_time'. "
+                    "Please drop and recreate the collection to enable time filtering. "
+                    f"collection={name}"
+                )
             return
 
         if dim <= 0:
@@ -102,6 +119,9 @@ class MilvusVectorRepository:
             ),
             pymilvus.FieldSchema(
                 name="doc_id", dtype=pymilvus.DataType.VARCHAR, max_length=128, is_primary=False
+            ),
+            pymilvus.FieldSchema(
+                name="doc_time", dtype=pymilvus.DataType.VARCHAR, max_length=128, is_primary=False
             ),
             pymilvus.FieldSchema(
                 name="chunk_id", dtype=pymilvus.DataType.VARCHAR, max_length=512, is_primary=False
@@ -161,13 +181,19 @@ class MilvusVectorRepository:
         pks: List[str] = []
         group_ids: List[str] = []
         doc_ids: List[str] = []
+        doc_times: List[str] = []
         chunk_ids: List[str] = []
         vecs: List[List[float]] = []
 
+        # 写入说明：
+        # - doc_time 使用 document.doc_time（同一文档的所有 chunk 相同），便于 Milvus 做 expr 过滤。
+        # - 建议 doc_time 使用 ISO8601（如 2026-02-17T08:30:54Z），这样字符串比较也具有一定可用性。
+        #   如果需要严格时间范围过滤，建议统一用 epoch 秒/毫秒字符串存储。
         for e in embeddings:
             pks.append(f"{e.group_id}:{e.chunk_id}")
             group_ids.append(e.group_id)
             doc_ids.append(e.doc_id)
+            doc_times.append(str(document.doc_time))
             chunk_ids.append(e.chunk_id)
             vecs.append(list(e.vector))
 
@@ -179,6 +205,6 @@ class MilvusVectorRepository:
                 f"Unknown Milvus upsert_strategy: {self._upsert_strategy}. Supported: insert_only, delete_then_insert"
             )
 
-        data = [pks, group_ids, doc_ids, chunk_ids, vecs]
+        data = [pks, group_ids, doc_ids, doc_times, chunk_ids, vecs]
         col.insert(data)
         col.flush()

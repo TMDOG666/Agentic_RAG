@@ -1,12 +1,6 @@
 """测试嵌入客户端 (EmbeddingClient)"""
 
 import os
-import sys
-from pathlib import Path
-
-# 添加项目根目录到路径
-project_root = Path(__file__).parent.parent.parent.parent
-sys.path.insert(0, str(project_root))
 
 from grag.config import initialize_config
 from grag.model.embedding_client import (
@@ -125,55 +119,3 @@ class TestEmbeddingClientGlobalFunctions:
         assert embeddings is not None
 
         print("✅ get_embeddings 返回有效嵌入实例")
-
-
-def run_tests():
-    """运行所有测试"""
-    print("\n" + "=" * 60)
-    print("开始测试 EmbeddingClient 模块")
-    print("=" * 60)
-
-    test_class = TestEmbeddingClient()
-    test_global = TestEmbeddingClientGlobalFunctions()
-
-    try:
-        test_class.setup_method()
-        test_class.test_embedding_client_init()
-
-        test_class.setup_method()
-        test_class.test_embedding_client_with_provider()
-
-        test_class.setup_method()
-        test_class.test_get_provider_info()
-
-        test_class.setup_method()
-        test_class.test_get_dimension()
-
-        test_class.setup_method()
-        test_class.test_get_embeddings_creates_instance()
-
-        test_class.setup_method()
-        test_class.test_refresh_embeddings()
-
-        test_global.setup_method()
-        test_global.test_get_embedding_client()
-
-        test_global.setup_method()
-        test_global.test_get_embeddings()
-
-        print("\n" + "=" * 60)
-        print("✅ 所有测试通过！")
-        print("=" * 60)
-
-    except AssertionError as e:
-        print(f"\n❌ 测试失败: {e}")
-        raise
-    except Exception as e:
-        print(f"\n❌ 测试出错: {e}")
-        import traceback
-        traceback.print_exc()
-        raise
-
-
-if __name__ == "__main__":
-    run_tests()

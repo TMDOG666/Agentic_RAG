@@ -46,12 +46,14 @@ class DataClientGraphStorage(GraphStorage):
         self,
         *,
         data_manager: Optional[DataManager] = None,
+        milvus_collection_name: Optional[str] = None,
         milvus_upsert_strategy: str = "insert_only",
     ) -> None:
         self._data_manager = data_manager or get_data_manager()
         self._pg_repo = PostgresGraphRepository(self._data_manager.get_postgres_client())
         self._milvus_repo = MilvusVectorRepository(
             self._data_manager.get_milvus_client(),
+            collection_name=milvus_collection_name,
             upsert_strategy=milvus_upsert_strategy,
         )
         self._neo4j_repo = Neo4jGraphRepository(self._data_manager.get_neo4j_client())
@@ -93,3 +95,9 @@ class DataClientGraphStorage(GraphStorage):
             entities=entities,
             relations=relations,
         )
+
+    def list_group_entities(self, *, group_id: str, limit: int = 500) -> Sequence[GraphEntityRecord]:
+        # 说明：跨文档融合所需的“历史实体候选”目前以 Postgres 为权威来源。
+        # - Postgres 存的是结构化实体元信息（canonical/type/aliases/description），读取成本低。
+        # - Neo4j 也有实体节点，但当前 key 含 doc_id，且查询/排序策略更复杂；因此此处先走 Postgres。
+        return self._pg_repo.list_group_entities(group_id=group_id, limit=limit)

@@ -1,11 +1,6 @@
 """测试文本清洗与标准化 (TextCleaner)"""
 
-import sys
 from pathlib import Path
-
-# 添加项目根目录到路径
-project_root = Path(__file__).parent.parent.parent.parent
-sys.path.insert(0, str(project_root))
 
 from grag.config import initialize_config, get_grag_settings, ProviderType
 from grag.preprocessing.text_cleaner import TextCleaner
@@ -71,32 +66,3 @@ class TestTextCleaner:
         assert fake.called is True, "应调用 LLM 的 chat 方法"
         assert result == "标准化后的内容"
         print("✅ standardize_with_llm 成功返回 LLM 结果")
-
-
-def run_tests():
-    """运行所有测试"""
-    print("\n" + "=" * 60)
-    print("开始测试 TextCleaner 模块")
-    print("=" * 60)
-
-    t = TestTextCleaner()
-
-    try:
-        t.setup_method(); t.test_init()
-        t.setup_method(); t.test_basic_clean()
-        t.setup_method(); t.test_standardize_with_llm_fallback()
-        t.setup_method(); t.test_standardize_with_llm_success()
-
-        print("\n" + "=" * 60)
-        print("✅ 所有测试通过！")
-        print("=" * 60)
-        return True
-    except Exception as e:
-        print(f"\n❌ 测试失败: {e}")
-        raise
-
-
-if __name__ == "__main__":
-    ok = run_tests()
-    sys.exit(0 if ok else 1)
-

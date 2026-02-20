@@ -1,4 +1,4 @@
-# GraphRAG 测试套件
+# GraphRAG 测试套件（pytest）
 
 本目录包含 GraphRAG 项目的所有测试代码。
 
@@ -19,22 +19,77 @@ test/
 
 ## 快速开始
 
-### 从项目根目录运行所有测试
+所有测试统一使用 `pytest` 运行。
+
+从项目根目录执行：
 
 ```bash
-# 使用快捷脚本
-python test_config.py
+pytest
 ```
 
-### 运行特定模块的测试
+如果你希望看到 `print(...)` 输出：
 
 ```bash
-# 配置模块测试
-python test/grag/config/run_all_tests.py
-
-# 或单独运行某个测试文件
-python test/grag/config/test_config_loader.py
+pytest -s
 ```
+
+如果你希望更详细的用例名输出：
+
+```bash
+pytest -v
+```
+
+只跑某个目录：
+
+```bash
+pytest test/grag/graph_construction
+pytest test/grag/storage
+```
+
+只跑某个文件：
+
+```bash
+pytest test/grag/graph_construction/test_graph_builder.py
+```
+
+只跑某个用例（按关键字筛选）：
+
+```bash
+pytest -k graph_builder
+pytest -k real_connection
+```
+
+## 统一运行规范（不要用环境变量控制测试行为）
+
+本仓库测试运行参数统一通过 `pytest` 命令行参数与 marker 控制。
+
+### 集成测试（REAL 外部依赖）
+
+对需要真实外部依赖（真实 LLM/Embedding + 真实 DB）的用例使用：
+
+```bash
+pytest -m integration -s
+```
+
+### 人工检查 DB：暂停与不清理
+
+当你需要在测试结束后进入数据库（Postgres/Milvus/Neo4j）人工查看写入结果时：
+
+- **暂停 N 秒后再清理**：
+
+```bash
+pytest -m integration -s --pause 600
+```
+
+- **完全不清理（保留数据）**：
+
+```bash
+pytest -m integration -s --no-cleanup
+```
+
+说明：
+- 以上参数由 `test/conftest.py` 统一提供。
+- 默认行为是：测试结束后会清理写入数据，避免污染真实库。
 
 ## 已实现的测试
 
@@ -49,8 +104,33 @@ python test/grag/config/test_config_loader.py
 - 数据库配置验证（Neo4j, Milvus, PostgreSQL）
 
 运行：
+
 ```bash
-python test/grag/config/run_all_tests.py
+pytest test/grag/config
+```
+
+### ✅ Graph Construction 测试
+
+位置：`test/grag/graph_construction/`
+
+运行：
+
+```bash
+pytest test/grag/graph_construction
+```
+
+说明：
+- 端到端（不落库）用例会注入 fake LLM/fake embedding，避免请求外部大模型。
+- real-db 用例会真实连接并写入 Postgres/Milvus/Neo4j，然后清理写入数据。
+
+### ✅ Storage 测试（REAL DB）
+
+位置：`test/grag/storage/`
+
+运行：
+
+```bash
+pytest test/grag/storage
 ```
 
 ## 测试规范
@@ -86,22 +166,7 @@ class TestModuleName:
 
 ### 运行测试的方式
 
-1. **直接运行 Python 脚本**
-   ```bash
-   python test/grag/config/test_config_loader.py
-   ```
-
-2. **使用 pytest**（如果已安装）
-   ```bash
-   pytest test/grag/config/
-   pytest test/grag/config/ -v  # 详细输出
-   pytest test/grag/config/ -s  # 显示 print 输出
-   ```
-
-3. **使用测试套件脚本**
-   ```bash
-   python test/grag/config/run_all_tests.py
-   ```
+统一使用 `pytest`。
 
 ## 添加新测试
 
@@ -114,10 +179,6 @@ class TestModuleName:
 
 import sys
 from pathlib import Path
-
-# 添加项目根目录到路径
-project_root = Path(__file__).parent.parent.parent.parent
-sys.path.insert(0, str(project_root))
 
 from grag.module import function_to_test
 
@@ -133,33 +194,11 @@ class TestModuleName:
         assert result is not None
         
         print("✅ 测试通过")
-
-
-def run_tests():
-    """运行所有测试"""
-    test = TestModuleName()
-    test.test_feature()
-    print("\n✅ 所有测试通过！")
-
-
-if __name__ == "__main__":
-    run_tests()
 ```
 
 ### 2. 更新测试套件
 
-如果创建了新的测试模块，在 `run_all_tests.py` 中添加：
-
-```python
-# 测试新模块
-try:
-    from test_new_module import run_tests as run_new_tests
-    run_new_tests()
-    test_results["passed"] += 1
-except Exception as e:
-    test_results["failed"] += 1
-    test_results["errors"].append(("NewModule", str(e)))
-```
+无需更新任何“聚合脚本”。pytest 会自动收集 `test_*.py` 与其中 `test_*` 用例。
 
 ## 测试最佳实践
 
@@ -211,7 +250,7 @@ jobs:
           pip install -r requirements.txt
       - name: Run tests
         run: |
-          python test_config.py
+          pytest
 ```
 
 ## 故障排查
@@ -235,11 +274,40 @@ jobs:
 - 测试脚本已包含 UTF-8 编码设置
 - 确保使用提供的测试脚本运行
 
+## REAL DB 测试前置条件（Postgres/Milvus/Neo4j）
+
+本仓库包含部分真实数据库测试（例如 `test/grag/storage`、`test/grag/graph_construction/test_graph_builder.py`）。
+
+在运行这些测试前，请确保：
+
+- **Postgres**：服务可连接，且 `grag_config.yaml` 指向正确 host/port/user/password/database
+- **Milvus**：服务可连接，且 collection schema 与代码一致
+- **Neo4j**：服务可连接，且账号/数据库配置正确
+
+另外，真实 LLM/Embedding 用例需要外部服务鉴权（API Key）。建议通过环境变量或你本地的密钥管理方式提供（避免把密钥写进仓库文件）。
+
+建议先运行连接性检测用例：
+
+```bash
+pytest -k test_connection -s
+```
+
+### Milvus `doc_time` schema 报错
+
+如果你看到类似错误（旧 collection 缺少 `doc_time` 字段），说明 Milvus 里存在旧 collection：
+
+- 需要 **drop + recreate**（Milvus 不支持在线加字段）
+
+处理方式（选一种）：
+
+- 直接在 Milvus 里 drop 对应 collection
+- 或者用你项目提供的 Milvus client/配置 drop 后再重跑测试
+
+drop 完后，测试/代码会在首次写入时自动创建带 `doc_time` 的新 collection。
+
 ## 未来计划
 
-- [ ] 添加 Model 模块测试
-- [ ] 添加 Data 模块测试
-- [ ] 添加 Graph Construction 模块测试
+- [ ] 增加 CI 中的数据库集成测试编排（例如 docker compose）
 - [ ] 添加 Retrieval 模块测试
 - [ ] 添加集成测试
 - [ ] 添加性能测试

@@ -1,11 +1,5 @@
 """测试 PostgreSQL 客户端 (PostgresClient)"""
 
-import sys
-from pathlib import Path
-
-project_root = Path(__file__).parent.parent.parent.parent
-sys.path.insert(0, str(project_root))
-
 from grag.config import initialize_config
 from grag.data_client.postgres_client import PostgresClient, get_postgres_client
 
@@ -81,28 +75,3 @@ class TestPostgresGlobalFunctions:
         assert client is not None
         assert isinstance(client, PostgresClient)
         print("✅ get_postgres_client 返回有效客户端")
-
-
-def run_tests():
-    print("\n" + "=" * 60)
-    print("开始测试 PostgresClient 模块")
-    print("=" * 60)
-    t = TestPostgresClient()
-    g = TestPostgresGlobalFunctions()
-    try:
-        t.setup_method(); t.test_init()
-        t.setup_method(); t.test_get_config_info()
-        t.setup_method(); t.test_get_connect_params()
-        t.setup_method(); t.test_get_connection()
-        t.setup_method(); t.test_test_connection()
-        g.setup_method(); g.test_get_postgres_client()
-        print("\n" + "=" * 60)
-        print("✅ 所有测试通过！")
-        print("=" * 60)
-    except Exception as e:
-        print(f"\n❌ 测试失败: {e}")
-        raise
-
-
-if __name__ == "__main__":
-    run_tests()

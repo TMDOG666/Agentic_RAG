@@ -1,11 +1,5 @@
 """测试数据层管理器 (DataManager)"""
 
-import sys
-from pathlib import Path
-
-project_root = Path(__file__).parent.parent.parent.parent
-sys.path.insert(0, str(project_root))
-
 from grag.config import initialize_config
 from grag.data_client import (
     DataManager,
@@ -106,30 +100,3 @@ class TestDataManagerGlobalFunctions:
         manager2 = get_data_manager()
         assert manager is manager2
         print("✅ get_data_manager 返回单例")
-
-
-def run_tests():
-    print("\n" + "=" * 60)
-    print("开始测试 DataManager 模块")
-    print("=" * 60)
-    t = TestDataManager()
-    g = TestDataManagerGlobalFunctions()
-    try:
-        t.setup_method(); t.test_init()
-        t.setup_method(); t.test_get_neo4j_client()
-        t.setup_method(); t.test_get_milvus_client()
-        t.setup_method(); t.test_get_postgres_client()
-        t.setup_method(); t.test_get_config_info()
-        t.setup_method(); t.test_test_all_connections()
-        t.setup_method(); t.test_cleanup()
-        g.setup_method(); g.test_get_data_manager()
-        print("\n" + "=" * 60)
-        print("✅ 所有测试通过！")
-        print("=" * 60)
-    except Exception as e:
-        print(f"\n❌ 测试失败: {e}")
-        raise
-
-
-if __name__ == "__main__":
-    run_tests()

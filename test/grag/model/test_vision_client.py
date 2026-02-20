@@ -1,12 +1,5 @@
 """测试视觉模型客户端 (VisionClient)"""
 
-import sys
-from pathlib import Path
-
-# 添加项目根目录到路径
-project_root = Path(__file__).parent.parent.parent.parent
-sys.path.insert(0, str(project_root))
-
 from grag.config import initialize_config, get_grag_settings, ProviderType
 from grag.model import VisionClient, get_vision_client
 
@@ -74,32 +67,4 @@ class TestVisionGlobalFunctions:
         client2 = get_vision_client()
         assert client is client2, "get_vision_client 应返回单例"
         print("✅ get_vision_client 返回 VisionClient 单例")
-
-
-def run_tests():
-    """运行所有测试"""
-    print("\n" + "=" * 60)
-    print("开始测试 VisionClient 模块")
-    print("=" * 60)
-
-    t = TestVisionClient()
-    g = TestVisionGlobalFunctions()
-
-    try:
-        t.setup_method(); t.test_init()
-        t.setup_method(); t.test_get_config_info()
-        t.setup_method(); t.test_get_client_lazy()
-
-        g.setup_method(); g.test_get_vision_client()
-
-        print("\n" + "=" * 60)
-        print("✅ 所有测试通过！")
-        print("=" * 60)
-    except Exception as e:
-        print(f"\n❌ 测试失败: {e}")
-        raise
-
-
-if __name__ == "__main__":
-    run_tests()
 

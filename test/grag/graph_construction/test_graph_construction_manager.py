@@ -1,23 +1,11 @@
-import sys
 from pathlib import Path
 
 import json
-import os
 from datetime import datetime, timezone
 
-# 添加项目根目录到路径
-project_root = Path(__file__).parent.parent.parent.parent
-sys.path.insert(0, str(project_root))
-
 from grag.graph_construction.graph_construction_manager import GraphConstructionManager
-from grag.config import get_settings
-
-
-SAMPLE_ENTITY_RELATION_RAW = """entity<|SEP|>张三<|SEP|>人物<|SEP|>文档中的人物
-entity<|SEP|>李四<|SEP|>人物<|SEP|>另一位人物
-relation<|SEP|>张三<|SEP|>李四<|SEP|>朋友关系<|SEP|>friend<|SEP|>8
-<|DONE|>
-"""
+from grag.config import ProviderType, get_grag_settings
+import pytest
 
 
 def _paths() -> tuple[Path, Path]:
@@ -92,84 +80,43 @@ def _result_to_jsonable(result) -> dict:
         },
     }
 
-def test_graph_construction_manager_end_to_end_from_chinese_outline() -> None:
+
+def _is_local_url(url: str | None) -> bool:
+    if not url:
+        return False
+    url_lower = url.lower()
+    return any(x in url_lower for x in ["localhost", "127.0.0.1", "0.0.0.0", "local", ".local"])
+
+
+def _ensure_real_llm_ready() -> None:
+    settings = get_grag_settings()
+    llm_cfg = settings.get_provider_config(ProviderType.LLM)
+    llm_api_key = (
+        __import__("os").environ.get("GRAG_LLM_API_KEY")
+        or __import__("os").environ.get(getattr(llm_cfg, "api_key_env", "") or "")
+    )
+    if not llm_api_key and llm_cfg.base_url and not _is_local_url(llm_cfg.base_url):
+        pytest.skip("LLM API key missing for non-local base_url")
+
+
+@pytest.mark.integration
+def test_graph_construction_manager_end_to_end_from_chinese_outline(real_doc_texts) -> None:
     """端到端跑完整流程。
 
     输入：test_data/input/chinese_outline.txt
     输出：test_data/output/chinese_outline.graph_construction_manager.json
-
-    默认使用真实 LLM；如果你只想离线验证流程串联，可设置：
-        GRAG_USE_FAKE_LLM=1
     """
 
-    use_fake_llm = os.environ.get("GRAG_USE_FAKE_LLM") == "1"
+    _ensure_real_llm_ready()
 
-    if use_fake_llm:
-        def fake_coref_chat(_prompt: str) -> str:
-            return "[]"
+    manager = GraphConstructionManager()
 
-        def fake_entity_relation_chat(_prompt: str) -> str:
-            return SAMPLE_ENTITY_RELATION_RAW
-
-        def fake_fusion_chat(_prompt: str) -> str:
-            # entity_resolution_knowledge_fusion 期望 LLM 输出为 JSON
-            return """[{\"canonical_name\":\"张三\",\"type\":\"人物\",\"aliases\":[\"张三\"],\"description\":\"人物\"}]"""
-
-        def fake_embedding_fn(texts: list[str], _provider: str) -> list[list[float]]:
-            # 为每条输入返回一个固定维度向量，避免真实 embedding 调用
-            return [[0.0, 0.0, float(i)] for i in range(len(texts))]
-
-        manager = GraphConstructionManager(
-            coref_llm_chat_fn=fake_coref_chat,
-            entity_relation_llm_chat_fn=fake_entity_relation_chat,
-            fusion_llm_chat_fn=fake_fusion_chat,
-            embedding_fn=fake_embedding_fn,
-        )
-    else:
-        manager = GraphConstructionManager(
-            coref_llm_chat_fn=None,
-            entity_relation_llm_chat_fn=None,
-        )
-
-    stem, text = _read_input_text("chinese_outline.txt")
-    doc_time = datetime.now(timezone.utc).isoformat()
-    result = manager.run(text=text, doc_time=doc_time, doc_name=stem)
-
-    _write_outputs(stem, _result_to_jsonable(result))
-
-
-
-
-def run_tests() -> bool:
-    tests = [
-        ("chinese_outline", "端到端 chinese_outline", test_graph_construction_manager_end_to_end_from_chinese_outline),
-    ]
-
-    # 允许只跑某一个测试，便于你做“真实端到端”验证。
-    # 例如：
-    #   GRAG_RUN_TEST=chinese_outline
-    run_only = os.environ.get("GRAG_RUN_TEST")
-    if run_only:
-        run_only = run_only.strip().lower()
-        tests = [t for t in tests if t[0] == run_only]
-
-    results: list[tuple[str, bool, str]] = []
-    for key, name, fn in tests:
-        try:
-            fn()
-            print(f"[PASS] {key} - {name}")
-            results.append((name, True, ""))
-        except Exception as e:
-            print(f"[FAIL] {key} - {name}: {repr(e)}")
-            results.append((name, False, repr(e)))
-
-    if not results:
-        print(f"No tests selected. GRAG_RUN_TEST={os.environ.get('GRAG_RUN_TEST')!r}")
-        return False
-
-    return all(ok for _, ok, _ in results)
-
-
-if __name__ == "__main__":
-    ok = run_tests()
-    raise SystemExit(0 if ok else 1)
+    for p, text in real_doc_texts:
+        stem = p.stem
+        doc_time = datetime.now(timezone.utc).isoformat()
+        snippet = text[:4000]
+        result = manager.run(text=snippet, doc_time=doc_time, doc_name=stem)
+        assert result.doc_name == stem
+        assert result.doc_time == doc_time
+        assert isinstance(result.chunks, list)
+        _write_outputs(stem, _result_to_jsonable(result))

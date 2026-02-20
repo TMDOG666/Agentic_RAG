@@ -20,9 +20,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, List, Optional
+import math
+import json
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from ..model.embedding_client import EmbeddingClient
+from ..model.llm_client import LLMClient
 from ..storage import (
     ChunkEmbeddingRecord,
     ChunkRecord,
@@ -60,6 +63,8 @@ class GraphBuilder:
         construction_manager: Optional[GraphConstructionManager] = None,
         embedding_fn: Optional[Callable[[List[str], str], List[List[float]]]] = None,
         embedding_provider: Optional[str] = None,
+        llm_chat_fn: Optional[Callable[[str], str]] = None,
+        llm_provider: Optional[str] = None,
     ) -> None:
         """创建 GraphBuilder。
 
@@ -82,6 +87,8 @@ class GraphBuilder:
         self._embedding_fn = embedding_fn
         self._embedding_provider = embedding_provider
         self._embedding_client = EmbeddingClient(provider_name=embedding_provider)
+        self._llm_chat_fn = llm_chat_fn
+        self._llm_provider = llm_provider
 
     def build_and_save(
         self,
@@ -193,6 +200,31 @@ class GraphBuilder:
                 for r in getattr(fusion, "rewritten_relations", [])
             ]
 
+        # 3.5) 同组多文档融合（跨 doc 的 canonical 对齐）：
+        #
+        # 背景：
+        # - 上游 `GraphConstructionManager` 的 fusion 只做“文档内部”的实体统一。
+        # - 但在同一个 group 内，多个文档可能反复出现同一实体（例如同一个人/公司），
+        #   需要将“新文档里出现的实体”尽量对齐到“历史文档里已出现的 canonical”。
+        #
+        # 约束（按当前项目阶段的最小可用实现）：
+        # - 只影响当前文档的 `entities/relations`（即：重写本次入库的 canonical 与关系端点）。
+        # - 不回写/修改历史 doc 的实体记录（避免跨文档回写导致的幂等/一致性复杂度）。
+        #
+        # 策略：
+        # - 先从存储层读取同 group 的历史实体（由 storage 实现提供，例如从 Postgres grag_entities 读取）。
+        # - 关键词/向量召回候选实体。
+        # - 只有当“命中但不确定”时才调用 LLM 做同一性判断 + 知识融合（省钱）。
+        # - 最终重写 relations 的 subject/object，确保指向融合后的 canonical。
+        if entities:
+            old_entities = list(self._storage.list_group_entities(group_id=group_id, limit=1000))
+            entities, relations = self._cross_document_entity_fusion(
+                group_id=group_id,
+                new_entities=entities,
+                relations=relations,
+                old_entities=old_entities,
+            )
+
         # 4) 入库
         self._storage.save_document(
             document=document,
@@ -210,3 +242,356 @@ class GraphBuilder:
             entities=entities,
             relations=relations,
         )
+
+    def _cross_document_entity_fusion(
+        self,
+        *,
+        group_id: str,
+        new_entities: Sequence[GraphEntityRecord],
+        relations: Sequence[GraphRelationRecord],
+        old_entities: Sequence[GraphEntityRecord],
+        vector_threshold: float = 0.90,
+        vector_uncertain_gap: float = 0.05,
+    ) -> tuple[List[GraphEntityRecord], List[GraphRelationRecord]]:
+        """跨文档实体融合（同 group）。
+
+        输入：
+        - new_entities / relations：当前文档（doc_id）内已经做过“文档内部融合”的实体与关系。
+        - old_entities：同 group 下历史文档里出现过的 canonical entities（从存储层读取）。
+
+        输出：
+        - entities：对齐后的实体列表（仅用于当前文档写入）
+        - relations：subject/object 经过 canonical 重写后的关系列表（仅用于当前文档写入）
+
+        重要说明：
+        - 本函数不会改写历史文档的实体，也不会在存储层创建“全局实体表”。
+        - 这里的“融合”含义是：将当前文档的实体尽量映射到历史 canonical 名称，
+          并对 aliases/description 做合并；最终写入仍然是 (group_id, doc_id, canonical_name) 的 doc 级实体。
+
+        触发 LLM（省钱策略）：
+        - 仅当候选命中但不确定时调用 LLM。
+        - 不确定的定义：
+          - 向量相似度落在 [vector_threshold-vector_uncertain_gap, vector_threshold) 区间
+          - 或关键词命中但：
+            - 命中来自 alias（而不是 canonical 精确命中）
+            - 或 type 冲突
+            - 或 description 长度差异显著（ratio >= 3）
+        """
+
+        def _norm(s: str) -> str:
+            return (s or "").strip().lower()
+
+        def _entity_text(e: GraphEntityRecord) -> str:
+            aliases = " ".join([a for a in e.aliases if a])
+            return f"{e.canonical_name}\n{e.type}\n{aliases}\n{e.description}".strip()
+
+        def _cos_sim(a: Sequence[float], b: Sequence[float]) -> float:
+            if not a or not b or len(a) != len(b):
+                return -1.0
+            dot = 0.0
+            na = 0.0
+            nb = 0.0
+            for x, y in zip(a, b):
+                dot += float(x) * float(y)
+                na += float(x) * float(x)
+                nb += float(y) * float(y)
+            if na <= 0.0 or nb <= 0.0:
+                return -1.0
+            return dot / (math.sqrt(na) * math.sqrt(nb))
+
+        def _llm_same_entity_and_merge(
+            *,
+            incoming: GraphEntityRecord,
+            candidate: GraphEntityRecord,
+            prefer_canonical: str,
+        ) -> Tuple[bool, Optional[GraphEntityRecord]]:
+            # LLM 的职责：
+            # - 判断 incoming(new) 与 candidate(old) 是否同一实体
+            # - 同一时返回合并后的 canonical/aliases/description（尽量沿用 prefer_canonical 以保持稳定）
+            #
+            # 注意：
+            # - 只输出 JSON，方便稳定解析
+            # - LLM 输出解析失败时，按“不合并”处理（fail-closed）
+            prompt = (
+                "你是一个实体对齐与知识融合助手。\n"
+                "任务：判断 new_entity 与 old_entity 是否表示同一个现实世界实体。\n"
+                "- 如果不是同一个实体：输出 JSON: {\"same\": false}\n"
+                "- 如果是同一个实体：输出 JSON: {\"same\": true, \"canonical_name\": <string>, \"type\": <string>, \"aliases\": <list[string]>, \"description\": <string>}\n"
+                "要求：\n"
+                "- canonical_name 优先使用 prefer_canonical（除非明显更合适）\n"
+                "- aliases 需包含两边的 canonical/aliases 并去重\n"
+                "- description 融合两边信息，简洁完整\n"
+                "只输出 JSON，不要输出其他文字。\n\n"
+                f"prefer_canonical: {prefer_canonical}\n"
+                "new_entity:\n"
+                + json.dumps(
+                    {
+                        "name": incoming.canonical_name,
+                        "type": incoming.type,
+                        "aliases": list(incoming.aliases),
+                        "description": incoming.description,
+                    },
+                    ensure_ascii=False,
+                )
+                + "\nold_entity:\n"
+                + json.dumps(
+                    {
+                        "name": candidate.canonical_name,
+                        "type": candidate.type,
+                        "aliases": list(candidate.aliases),
+                        "description": candidate.description,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+
+            chat = self._llm_chat_fn
+            if chat is None:
+                chat = LLMClient(self._llm_provider).chat
+
+            raw = (chat(prompt) or "").strip()
+            try:
+                data = json.loads(raw)
+            except Exception:
+                return False, None
+
+            if not isinstance(data, dict):
+                return False, None
+
+            same = bool(data.get("same"))
+            if not same:
+                return False, None
+
+            canonical_name = str(data.get("canonical_name") or "").strip() or prefer_canonical
+            etype = str(data.get("type") or "").strip() or (candidate.type or incoming.type)
+            aliases_raw = data.get("aliases")
+            desc = str(data.get("description") or "").strip() or (candidate.description or incoming.description)
+
+            aliases: List[str] = []
+            if isinstance(aliases_raw, list):
+                aliases = [str(x).strip() for x in aliases_raw if str(x).strip()]
+            else:
+                aliases = []
+
+            return (
+                True,
+                GraphEntityRecord(
+                    group_id=group_id,
+                    doc_id=incoming.doc_id,
+                    canonical_name=canonical_name,
+                    type=etype,
+                    aliases=aliases,
+                    description=desc,
+                ),
+            )
+
+        # 1) 关键词检索：按 canonical/alias 精确命中
+        #
+        # 说明：这里使用“精确命中”是为了快与可解释。
+        # - canonical 精确命中：通常认为强信号（更可能同一实体）
+        # - alias 命中：可能存在歧义（例如外号/简称/同名），因此可能触发 LLM
+        old_by_name: Dict[str, GraphEntityRecord] = {}
+        for oe in old_entities:
+            old_by_name.setdefault(_norm(oe.canonical_name), oe)
+            for a in oe.aliases:
+                old_by_name.setdefault(_norm(a), oe)
+
+        # 2) 向量检索：对“实体文本”做 embedding，并在内存中做相似度
+        #
+        # 说明：为了最小可用实现，这里并未把 entity 向量落 Milvus。
+        # - 优点：无需新增 entity collection/schema
+        # - 缺点：old_entities 多时会变慢（O(N)），后续可以升级为 entity 向量落库 + ANN 召回。
+        old_vecs: Dict[str, List[float]] = {}
+        if old_entities:
+            old_texts = [_entity_text(e) for e in old_entities]
+            if self._embedding_fn is not None:
+                provider = self._embedding_provider or "default"
+                old_vectors = self._embedding_fn(old_texts, provider)
+            else:
+                old_vectors = self._embedding_client.embed_texts(old_texts)
+            for oe, v in zip(old_entities, old_vectors):
+                old_vecs[_norm(oe.canonical_name)] = list(v)
+
+        alias_map: Dict[str, str] = {}
+        merged: Dict[str, GraphEntityRecord] = {}
+
+        def _merge_entity(*, base: GraphEntityRecord, incoming: GraphEntityRecord) -> GraphEntityRecord:
+            aliases = set([a for a in base.aliases if a] + [a for a in incoming.aliases if a])
+            aliases.add(incoming.canonical_name)
+            aliases.add(base.canonical_name)
+            desc = base.description
+            if len((incoming.description or "")) > len((desc or "")):
+                desc = incoming.description
+            return GraphEntityRecord(
+                group_id=group_id,
+                doc_id=incoming.doc_id,
+                canonical_name=base.canonical_name,
+                type=base.type or incoming.type,
+                aliases=sorted(aliases),
+                description=desc,
+            )
+
+        def _desc_gap(a: str, b: str) -> float:
+            la = len((a or "").strip())
+            lb = len((b or "").strip())
+            if la <= 0 and lb <= 0:
+                return 0.0
+            mn = max(1, min(la, lb))
+            mx = max(la, lb)
+            return float(mx) / float(mn)
+
+        for ne in new_entities:
+            key = _norm(ne.canonical_name)
+
+            keyword_candidate: Optional[GraphEntityRecord] = None
+            keyword_hit_from_alias = False
+            keyword_type_conflict = False
+            keyword_desc_gap = 0.0
+
+            # 2.1 关键词命中
+            hit = old_by_name.get(key)
+            if hit is None:
+                for a in ne.aliases:
+                    hit = old_by_name.get(_norm(a))
+                    if hit is not None:
+                        break
+
+            if hit is not None:
+                keyword_candidate = hit
+                keyword_hit_from_alias = _norm(hit.canonical_name) != key
+                if _norm(hit.type) and _norm(ne.type) and _norm(hit.type) != _norm(ne.type):
+                    keyword_type_conflict = True
+                keyword_desc_gap = _desc_gap(hit.description, ne.description)
+
+            # 2.2 向量候选（同 type + 高相似度）
+            #
+            # - 当关键词未命中时，才走向量召回。
+            # - 这里对 type 做了“硬过滤”（type 不一致则跳过），用于减少误合并。
+            vector_candidate: Optional[GraphEntityRecord] = None
+            vector_sim: float = -1.0
+            vector_uncertain_candidate: Optional[GraphEntityRecord] = None
+
+            if hit is None and old_entities:
+                ne_text = _entity_text(ne)
+                if self._embedding_fn is not None:
+                    provider = self._embedding_provider or "default"
+                    ne_vec = self._embedding_fn([ne_text], provider)[0]
+                else:
+                    ne_vec = self._embedding_client.embed_texts([ne_text])[0]
+
+                best: tuple[float, Optional[GraphEntityRecord]] = (-1.0, None)
+                for oe in old_entities:
+                    if _norm(oe.type) and _norm(ne.type) and _norm(oe.type) != _norm(ne.type):
+                        continue
+                    oe_vec = old_vecs.get(_norm(oe.canonical_name))
+                    if oe_vec is None:
+                        continue
+                    sim = _cos_sim(ne_vec, oe_vec)
+                    if sim > best[0]:
+                        best = (sim, oe)
+
+                if best[1] is not None and best[0] >= float(vector_threshold):
+                    hit = best[1]
+
+                vector_candidate = best[1]
+                vector_sim = float(best[0])
+
+                # 不确定区间：命中但不够“明显”，交给 LLM 做判定
+                if (
+                    best[1] is not None
+                    and (float(vector_threshold) - float(vector_uncertain_gap)) <= float(best[0]) < float(vector_threshold)
+                ):
+                    vector_uncertain_candidate = best[1]
+
+            # 3) 只有“不确定命中”才调用 LLM（省钱）
+            # - 向量不确定区间
+            # - 关键词命中但：type 冲突 / alias 命中 / 描述差异显著
+            keyword_uncertain = (
+                keyword_candidate is not None
+                and (keyword_type_conflict or keyword_hit_from_alias or keyword_desc_gap >= 3.0)
+            )
+
+            llm_candidate: Optional[GraphEntityRecord] = None
+            if vector_uncertain_candidate is not None:
+                llm_candidate = vector_uncertain_candidate
+            elif keyword_uncertain and keyword_candidate is not None:
+                llm_candidate = keyword_candidate
+
+            # 3.1 向量/关键词命中但不确定：尝试 LLM 判同 + 产出融合实体
+            if hit is None and llm_candidate is not None:
+                try:
+                    same, merged_llm = _llm_same_entity_and_merge(
+                        incoming=ne,
+                        candidate=llm_candidate,
+                        prefer_canonical=llm_candidate.canonical_name,
+                    )
+                    if same and merged_llm is not None:
+                        merged[_norm(merged_llm.canonical_name)] = merged_llm
+                        alias_map[_norm(ne.canonical_name)] = merged_llm.canonical_name
+                        for a in ne.aliases:
+                            alias_map[_norm(a)] = merged_llm.canonical_name
+                        alias_map.setdefault(_norm(llm_candidate.canonical_name), merged_llm.canonical_name)
+                        for a in llm_candidate.aliases:
+                            alias_map.setdefault(_norm(a), merged_llm.canonical_name)
+                        continue
+                except Exception:
+                    pass
+
+            # 3.2 无命中（或 LLM 判定失败）：保留新实体
+            if hit is None:
+                merged[key] = ne
+                alias_map[_norm(ne.canonical_name)] = ne.canonical_name
+                for a in ne.aliases:
+                    alias_map[_norm(a)] = ne.canonical_name
+                continue
+
+            # 3.3 关键词命中但不确定：交给 LLM 判同+融合（省钱策略下的“必要调用”）
+            if keyword_uncertain and keyword_candidate is not None:
+                try:
+                    same, merged_llm = _llm_same_entity_and_merge(
+                        incoming=ne,
+                        candidate=keyword_candidate,
+                        prefer_canonical=keyword_candidate.canonical_name,
+                    )
+                    if same and merged_llm is not None:
+                        merged[_norm(merged_llm.canonical_name)] = merged_llm
+                        alias_map[_norm(ne.canonical_name)] = merged_llm.canonical_name
+                        for a in ne.aliases:
+                            alias_map[_norm(a)] = merged_llm.canonical_name
+                        alias_map.setdefault(_norm(keyword_candidate.canonical_name), merged_llm.canonical_name)
+                        for a in keyword_candidate.aliases:
+                            alias_map.setdefault(_norm(a), merged_llm.canonical_name)
+                        continue
+                except Exception:
+                    pass
+
+            # 3.4 明显同一实体：启发式合并（不调用 LLM）
+            fused = _merge_entity(base=hit, incoming=ne)
+            merged[_norm(fused.canonical_name)] = fused
+            alias_map[_norm(ne.canonical_name)] = fused.canonical_name
+            for a in ne.aliases:
+                alias_map[_norm(a)] = fused.canonical_name
+
+            # 将历史实体本身的 canonical/aliases 也纳入映射，便于重写 relations
+            alias_map.setdefault(_norm(hit.canonical_name), fused.canonical_name)
+            for a in hit.aliases:
+                alias_map.setdefault(_norm(a), fused.canonical_name)
+
+        def _rewrite_name(name: str) -> str:
+            return alias_map.get(_norm(name), name)
+
+        rewritten_relations: List[GraphRelationRecord] = []
+        for r in relations:
+            rewritten_relations.append(
+                GraphRelationRecord(
+                    group_id=r.group_id,
+                    doc_id=r.doc_id,
+                    subject=_rewrite_name(r.subject),
+                    object=_rewrite_name(r.object),
+                    relation_type=r.relation_type,
+                    description=r.description,
+                    confidence=r.confidence,
+                )
+            )
+
+        return list(merged.values()), rewritten_relations

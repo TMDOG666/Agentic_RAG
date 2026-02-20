@@ -1,12 +1,6 @@
 """测试配置管理器 (ConfigManager)"""
 
 import os
-import sys
-from pathlib import Path
-
-# 添加项目根目录到路径
-project_root = Path(__file__).parent.parent.parent.parent
-sys.path.insert(0, str(project_root))
 
 from grag.config.config_manager import (
     ConfigManager,
@@ -244,73 +238,3 @@ class TestDatabaseConfigs:
         print(f"   端口: {postgres_config.port}")
         print(f"   数据库: {postgres_config.database}")
         print(f"   用户: {postgres_config.user}")
-
-
-def run_tests():
-    """运行所有测试"""
-    print("\n" + "="*60)
-    print("开始测试 ConfigManager 模块")
-    print("="*60)
-    
-    # 创建测试实例
-    test_manager = TestConfigManager()
-    test_global = TestGlobalFunctions()
-    test_db = TestDatabaseConfigs()
-    
-    try:
-        # 测试 ConfigManager 类
-        test_manager.setup_method()
-        test_manager.test_initialize()
-        
-        test_manager.setup_method()
-        test_manager.test_get_config()
-        
-        test_manager.setup_method()
-        test_manager.test_get_settings()
-        
-        test_manager.setup_method()
-        test_manager.test_get_config_value()
-        
-        test_manager.setup_method()
-        test_manager.test_set_config_value()
-        
-        test_manager.setup_method()
-        test_manager.test_get_provider_config()
-        
-        test_manager.setup_method()
-        test_manager.test_validation_results()
-        
-        test_manager.setup_method()
-        test_manager.test_config_info()
-        
-        # 测试全局函数
-        test_global.test_initialize_config()
-        test_global.test_get_grag_config()
-        test_global.test_get_grag_settings()
-        
-        # 测试数据库配置
-        test_db.setup_method()
-        test_db.test_neo4j_config()
-        
-        test_db.setup_method()
-        test_db.test_milvus_config()
-        
-        test_db.setup_method()
-        test_db.test_postgres_config()
-        
-        print("\n" + "="*60)
-        print("✅ 所有测试通过！")
-        print("="*60)
-        
-    except AssertionError as e:
-        print(f"\n❌ 测试失败: {e}")
-        raise
-    except Exception as e:
-        print(f"\n❌ 测试出错: {e}")
-        import traceback
-        traceback.print_exc()
-        raise
-
-
-if __name__ == "__main__":
-    run_tests()

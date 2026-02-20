@@ -1,11 +1,8 @@
 """测试预处理流程管理器 (PreprocessingManager)"""
 
-import sys
 from pathlib import Path
 
-# 添加项目根目录到路径
-project_root = Path(__file__).parent.parent.parent.parent
-sys.path.insert(0, str(project_root))
+project_root = Path(__file__).resolve().parents[3]
 
 from grag.config import initialize_config
 from grag.preprocessing.preprocessing_manager import (
@@ -100,36 +97,3 @@ class TestPreprocessingManagerGlobalFunctions:
         assert m.vision_provider == "siliconflow"
         assert m.llm_provider == "siliconflow"
         print("✅ get_preprocessing_manager(指定 provider) 返回独立实例")
-
-
-def run_tests():
-    """运行所有测试"""
-    print("\n" + "=" * 60)
-    print("开始测试 PreprocessingManager 模块")
-    print("=" * 60)
-
-    t = TestPreprocessingManager()
-    g = TestPreprocessingManagerGlobalFunctions()
-
-    try:
-        t.setup_method(); t.test_init()
-        t.setup_method(); t.test_process_file_without_llm()
-        t.setup_method(); t.test_process_file_with_llm()
-        t.setup_method(); t.test_batch_process()
-
-        g.setup_method(); g.test_get_preprocessing_manager()
-        g.setup_method(); g.test_get_preprocessing_manager_with_provider()
-
-        print("\n" + "=" * 60)
-        print("✅ 所有测试通过！")
-        print("=" * 60)
-        return True
-    except Exception as e:
-        print(f"\n❌ 测试失败: {e}")
-        raise
-
-
-if __name__ == "__main__":
-    ok = run_tests()
-    sys.exit(0 if ok else 1)
-

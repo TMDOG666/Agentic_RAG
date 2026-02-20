@@ -1,13 +1,7 @@
 """测试配置加载器 (ConfigLoader)"""
 
 import os
-import sys
 import pytest
-from pathlib import Path
-
-# 添加项目根目录到路径
-project_root = Path(__file__).parent.parent.parent.parent
-sys.path.insert(0, str(project_root))
 
 from grag.config.config_loader import ConfigLoader, load_grag_config, get_config_value
 
@@ -192,53 +186,3 @@ class TestGlobalFunctions:
         model = get_config_value("llm_providers.siliconflow.model")
         assert model is not None, "应该能获取到模型名称"
         print(f"✅ 模型名称: {model}")
-
-
-def run_tests():
-    """运行所有测试"""
-    print("\n" + "="*60)
-    print("开始测试 ConfigLoader 模块")
-    print("="*60)
-    
-    # 创建测试实例
-    test_loader = TestConfigLoader()
-    test_global = TestGlobalFunctions()
-    
-    try:
-        # 测试 ConfigLoader 类
-        test_loader.setup_method()
-        test_loader.test_load_grag_config()
-        
-        test_loader.setup_method()
-        test_loader.test_get_config_value()
-        
-        test_loader.setup_method()
-        test_loader.test_set_config_value()
-        
-        test_loader.setup_method()
-        test_loader.test_env_var_interpolation()
-        
-        test_loader.setup_method()
-        test_loader.test_config_cache()
-        
-        test_loader.setup_method()
-        test_loader.test_cache_info()
-        
-        # 测试全局函数
-        test_global.test_load_grag_config_function()
-        test_global.test_get_config_value_function()
-        
-        print("\n" + "="*60)
-        print("✅ 所有测试通过！")
-        print("="*60)
-        
-    except AssertionError as e:
-        print(f"\n❌ 测试失败: {e}")
-        raise
-    except Exception as e:
-        print(f"\n❌ 测试出错: {e}")
-        raise
-
-
-if __name__ == "__main__":
-    run_tests()

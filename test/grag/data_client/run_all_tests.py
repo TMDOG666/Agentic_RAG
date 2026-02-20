@@ -1,12 +1,5 @@
 """运行所有 Data 模块测试"""
 
-import sys
-from pathlib import Path
-
-project_root = Path(__file__).parent.parent.parent.parent
-sys.path.insert(0, str(project_root))
-
-
 def run_all_tests():
     print("\n" + "=" * 70)
     print(" " * 20 + "GraphRAG Data 模块测试套件")
@@ -49,8 +42,3 @@ def run_all_tests():
         print("⚠️  部分测试失败，请检查错误信息。")
     print("=" * 70 + "\n")
     return results["failed"] == 0
-
-
-if __name__ == "__main__":
-    success = run_all_tests()
-    sys.exit(0 if success else 1)

@@ -1,12 +1,5 @@
 """测试重排序客户端 (RerankerClient)"""
 
-import sys
-from pathlib import Path
-
-# 添加项目根目录到路径
-project_root = Path(__file__).parent.parent.parent.parent
-sys.path.insert(0, str(project_root))
-
 from grag.config import initialize_config
 from grag.model.reranker_client import (
     RerankerClient,
@@ -133,58 +126,3 @@ class TestRerankerClientGlobalFunctions:
         assert len(result) == 1
 
         print("✅ rerank_documents 返回格式正确")
-
-
-def run_tests():
-    """运行所有测试"""
-    print("\n" + "=" * 60)
-    print("开始测试 RerankerClient 模块")
-    print("=" * 60)
-
-    test_class = TestRerankerClient()
-    test_global = TestRerankerClientGlobalFunctions()
-
-    try:
-        test_class.setup_method()
-        test_class.test_reranker_client_init()
-
-        test_class.setup_method()
-        test_class.test_is_available()
-
-        test_class.setup_method()
-        test_class.test_get_provider_info()
-
-        test_class.setup_method()
-        test_class.test_rerank_returns_list()
-
-        test_class.setup_method()
-        test_class.test_rerank_without_top_k()
-
-        test_class.setup_method()
-        test_class.test_refresh_reranker()
-
-        test_global.setup_method()
-        test_global.test_get_reranker_client()
-
-        test_global.setup_method()
-        test_global.test_is_reranker_available()
-
-        test_global.setup_method()
-        test_global.test_rerank_documents()
-
-        print("\n" + "=" * 60)
-        print("✅ 所有测试通过！")
-        print("=" * 60)
-
-    except AssertionError as e:
-        print(f"\n❌ 测试失败: {e}")
-        raise
-    except Exception as e:
-        print(f"\n❌ 测试出错: {e}")
-        import traceback
-        traceback.print_exc()
-        raise
-
-
-if __name__ == "__main__":
-    run_tests()

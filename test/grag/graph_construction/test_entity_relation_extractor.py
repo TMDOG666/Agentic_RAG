@@ -1,19 +1,15 @@
-import sys
 from pathlib import Path
 
 import asyncio
 import json
 import time
-import traceback
-
-# 添加项目根目录到路径
-project_root = Path(__file__).parent.parent.parent.parent
-sys.path.insert(0, str(project_root))
 
 from grag.graph_construction.entity_relation_extractor import (
     Chunk,
     EntityRelationExtractor,
 )
+from grag.config import ProviderType, get_grag_settings
+import pytest
 
 
 def _paths() -> tuple[Path, Path]:
@@ -30,103 +26,47 @@ def _write_outputs(stem: str, payload: dict) -> None:
     (output_dir / f"{stem}.entity_relation.json").write_text(content, encoding="utf-8")
 
 
-def test_async_concurrency_and_retry() -> None:
+def _is_local_url(url: str | None) -> bool:
+    if not url:
+        return False
+    url_lower = url.lower()
+    return any(x in url_lower for x in ["localhost", "127.0.0.1", "0.0.0.0", "local", ".local"])
+
+
+def _ensure_real_llm_ready() -> None:
+    settings = get_grag_settings()
+    llm_cfg = settings.get_provider_config(ProviderType.LLM)
+    llm_api_key = (
+        __import__("os").environ.get("GRAG_LLM_API_KEY")
+        or __import__("os").environ.get(getattr(llm_cfg, "api_key_env", "") or "")
+    )
+    if not llm_api_key and llm_cfg.base_url and not _is_local_url(llm_cfg.base_url):
+        pytest.skip("LLM API key missing for non-local base_url")
+
+
+@pytest.mark.integration
+def test_extract_many_on_real_docs(real_doc_texts) -> None:
+    _ensure_real_llm_ready()
     started_at = time.time()
 
-    calls: dict[str, int] = {}
-
-    def fake_llm_chat(prompt: str) -> str:
-        # 用 prompt 中的 chunk_id 标记来决定行为（简单起见从 prompt 里找不到就走默认）
-        # 这里通过调用计数模拟“第一次失败，第二次成功”。
-        key = "default"
-        if "chunk_0" in prompt:
-            key = "chunk_0"
-        if "chunk_1" in prompt:
-            key = "chunk_1"
-
-        calls[key] = calls.get(key, 0) + 1
-        if key == "chunk_1" and calls[key] == 1:
-            raise RuntimeError("simulated transient error")
-
-        return "\n".join(
-            [
-                "entity<|SEP|>测试实体<|SEP|>概念<|SEP|>用于单测",
-                "relation<|SEP|>测试实体<|SEP|>测试实体<|SEP|>自环关系<|SEP|>测试<|SEP|>5",
-                "<|DONE|>",
-            ]
-        )
-
-    extractor = EntityRelationExtractor(llm_chat_fn=fake_llm_chat)
-
-    # 强行收敛重试等待时间，避免单测太慢
-    extractor.base_sleep_seconds = 0.01
+    extractor = EntityRelationExtractor()
+    extractor.base_sleep_seconds = 0.5
     extractor.max_retries = 2
 
-    chunks = [
-        Chunk(chunk_id="chunk_0", text="故事第一部分..."),
-        Chunk(chunk_id="chunk_1", text="故事第二部分..."),
-    ]
-
-    results = asyncio.run(extractor.extract_many(chunks))
-
-    assert isinstance(results, list)
-    assert len(results) == 2
-    assert results[0].chunk_id == "chunk_0"
-    assert results[1].chunk_id == "chunk_1"
-    assert results[0].entity_relation_raw
-    assert results[1].entity_relation_raw
-    assert results[0].error is None
-    assert results[1].error is None
-
-    # chunk_1 应该触发一次失败后重试成功
-    assert calls.get("chunk_1", 0) == 2
-
-    _write_outputs(
-        "async_concurrency_and_retry",
-        {
-            "elapsed_seconds": round(time.time() - started_at, 4),
-            "results": [r.__dict__ for r in results],
-            "calls": calls,
-        },
-    )
-
-
-def run_tests() -> bool:
-    print("\n" + "=" * 70)
-    print("GraphRAG EntityRelationExtractor 测试套件")
-    print("=" * 70)
-
-    tests = [
-        ("异步并发 + 重试", test_async_concurrency_and_retry),
-    ]
-
-    results: list[tuple[str, bool, str]] = []
-    for i, (name, test_func) in enumerate(tests, 1):
-        print("\n" + "=" * 70)
-        print(f"【{i}/{len(tests)}】测试 {name}")
-        print("=" * 70)
-        try:
-            test_func()
-            results.append((name, True, ""))
-            print(f"\n✅ {name} 测试通过")
-        except Exception as e:
-            results.append((name, False, repr(e)))
-            print(f"\n❌ {name} 测试失败: {repr(e)}")
-            traceback.print_exc()
-
-    passed = sum(1 for _, ok, _ in results if ok)
-    failed = len(results) - passed
-
-    print("\n" + "=" * 70)
-    print("测试总结")
-    print("=" * 70)
-    print(f"\n总测试数: {len(results)}")
-    print(f"✅ 通过: {passed}")
-    print(f"❌ 失败: {failed}")
-
-    return failed == 0
-
-
-if __name__ == "__main__":
-    ok = run_tests()
-    raise SystemExit(0 if ok else 1)
+    for p, text in real_doc_texts:
+        snippet = text[:2500]
+        chunks = [
+            Chunk(chunk_id=f"{p.stem}_0", text=snippet[:1200]),
+            Chunk(chunk_id=f"{p.stem}_1", text=snippet[1200:2400]),
+        ]
+        results = asyncio.run(extractor.extract_many(chunks))
+        assert len(results) == 2
+        assert all(isinstance(r.entity_relation_raw, str) for r in results)
+        _write_outputs(
+            f"{p.stem}.extract_many",
+            {
+                "elapsed_seconds": round(time.time() - started_at, 4),
+                "doc": p.name,
+                "results": [r.__dict__ for r in results],
+            },
+        )

@@ -153,7 +153,11 @@ class CoreferenceResolver:
             try:
                 if monitor is not None:
                     monitor.inc("coreference_resolution.llm_attempts", 1)
-                with (monitor.span("coreference_resolution.llm_call") if monitor is not None else _null_span()):
+                with (
+                    monitor.span("coreference_resolution.llm_call")
+                    if monitor is not None
+                    else self._null_span()
+                ):
                     return await asyncio.to_thread(self._llm_chat_fn, prompt)
             except Exception as e:
                 last_exc = e

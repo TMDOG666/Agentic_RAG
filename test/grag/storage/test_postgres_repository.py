@@ -1,9 +1,3 @@
-import sys
-from pathlib import Path
-
-project_root = Path(__file__).parent.parent.parent.parent
-sys.path.insert(0, str(project_root))
-
 from grag.storage.repositories.postgres_repository import PostgresGraphRepository
 from grag.storage.types import ChunkRecord, DocumentRecord, GraphEntityRecord
 
@@ -74,29 +68,3 @@ class TestPostgresGraphRepositoryRealDB:
             repo.upsert_document_and_chunks(document=doc, chunks=chunks, entities=entities)
         finally:
             _cleanup_postgres(group_id=group_id, doc_id=doc_id)
-
-
-def run_real_db_tests() -> None:
-    print("\n" + "=" * 60)
-    print("开始测试 PostgresGraphRepository (REAL DB)")
-    print("=" * 60)
-    t = TestPostgresGraphRepositoryRealDB()
-    t.test_real_connection_and_upsert_and_cleanup()
-
-
-def run_tests() -> None:
-    print("\n" + "=" * 60)
-    print("开始测试 PostgresGraphRepository (REAL DB)")
-    print("=" * 60)
-    try:
-        run_real_db_tests()
-        print("\n" + "=" * 60)
-        print("✅ 所有测试通过！")
-        print("=" * 60)
-    except Exception as e:
-        print(f"\n❌ 测试失败: {e}")
-        raise
-
-
-if __name__ == "__main__":
-    run_tests()

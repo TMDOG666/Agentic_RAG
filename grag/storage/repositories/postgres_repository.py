@@ -93,6 +93,64 @@ class PostgresGraphRepository:
         finally:
             conn.close()
 
+    def list_group_entities(self, *, group_id: str, limit: int = 500) -> Sequence[GraphEntityRecord]:
+        """列出同一 group 下已落库的实体（用于跨文档融合候选召回）。
+
+        数据来源：
+        - grag_entities 表（doc 级实体；主键为 group_id+doc_id+canonical_name）
+
+        返回值：
+        - GraphEntityRecord 列表，其中 doc_id 为实体首次出现的 doc。
+        - aliases_json 会反序列化为 aliases 列表。
+
+        注意：
+        - 这里按 doc_id DESC 简单排序，仅作为“最近写入优先”的近似策略。
+        - 后续如需更强的候选召回（例如按实体频次、按时间窗口），可在 SQL 层扩展。
+        """
+        import json
+
+        self.ensure_schema()
+
+        conn = self._client.get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT doc_id, canonical_name, type, aliases_json, description
+                        FROM grag_entities
+                        WHERE group_id = %s
+                        ORDER BY doc_id DESC
+                        LIMIT %s;
+                        """,
+                        (group_id, int(limit)),
+                    )
+                    rows = cur.fetchall()
+
+            out: list[GraphEntityRecord] = []
+            for doc_id, canonical_name, etype, aliases_json, description in rows:
+                aliases: list[str] = []
+                try:
+                    raw = json.loads(aliases_json or "[]")
+                    if isinstance(raw, list):
+                        aliases = [str(x) for x in raw if str(x).strip()]
+                except Exception:
+                    aliases = []
+
+                out.append(
+                    GraphEntityRecord(
+                        group_id=str(group_id),
+                        doc_id=str(doc_id),
+                        canonical_name=str(canonical_name),
+                        type=str(etype),
+                        aliases=aliases,
+                        description=str(description),
+                    )
+                )
+            return out
+        finally:
+            conn.close()
+
     def upsert_document_and_chunks(
         self,
         *,

@@ -1,9 +1,3 @@
-import sys
-from pathlib import Path
-
-project_root = Path(__file__).parent.parent.parent.parent
-sys.path.insert(0, str(project_root))
-
 from grag.storage.repositories.neo4j_repository import Neo4jGraphRepository
 from grag.storage.types import DocumentRecord, GraphEntityRecord, GraphRelationRecord
 
@@ -92,29 +86,3 @@ class TestNeo4jGraphRepositoryRealDB:
             repo.upsert_graph(document=doc, entities=entities, relations=relations)
         finally:
             _cleanup_neo4j(group_id=group_id, doc_id=doc_id)
-
-
-def run_real_db_tests() -> None:
-    print("\n" + "=" * 60)
-    print("开始测试 Neo4jGraphRepository (REAL DB)")
-    print("=" * 60)
-    t = TestNeo4jGraphRepositoryRealDB()
-    t.test_real_connection_and_upsert_and_cleanup()
-
-
-def run_tests() -> None:
-    print("\n" + "=" * 60)
-    print("开始测试 Neo4jGraphRepository (REAL DB)")
-    print("=" * 60)
-    try:
-        run_real_db_tests()
-        print("\n" + "=" * 60)
-        print("✅ 所有测试通过！")
-        print("=" * 60)
-    except Exception as e:
-        print(f"\n❌ 测试失败: {e}")
-        raise
-
-
-if __name__ == "__main__":
-    run_tests()

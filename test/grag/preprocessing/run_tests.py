@@ -1,13 +1,5 @@
 """运行所有预处理模块测试"""
 
-import sys
-from pathlib import Path
-
-# 添加项目根目录到路径
-project_root = Path(__file__).parent.parent.parent.parent
-sys.path.insert(0, str(project_root))
-
-
 def run_all_tests():
     """运行所有预处理相关测试"""
     print("\n" + "=" * 70)
@@ -92,9 +84,4 @@ def run_all_tests():
     print("=" * 70 + "\n")
 
     return results["failed"] == 0
-
-
-if __name__ == "__main__":
-    ok = run_all_tests()
-    sys.exit(0 if ok else 1)
 

@@ -1,11 +1,5 @@
 """测试 Milvus 客户端 (MilvusClient)"""
 
-import sys
-from pathlib import Path
-
-project_root = Path(__file__).parent.parent.parent.parent
-sys.path.insert(0, str(project_root))
-
 from grag.config import initialize_config
 from grag.data_client.milvus_client import MilvusClient, get_milvus_client
 
@@ -76,28 +70,3 @@ class TestMilvusGlobalFunctions:
         assert client is not None
         assert isinstance(client, MilvusClient)
         print("✅ get_milvus_client 返回有效客户端")
-
-
-def run_tests():
-    print("\n" + "=" * 60)
-    print("开始测试 MilvusClient 模块")
-    print("=" * 60)
-    t = TestMilvusClient()
-    g = TestMilvusGlobalFunctions()
-    try:
-        t.setup_method(); t.test_init()
-        t.setup_method(); t.test_get_config_info()
-        t.setup_method(); t.test_get_collection_name()
-        t.setup_method(); t.test_connect_disconnect()
-        t.setup_method(); t.test_test_connection()
-        g.setup_method(); g.test_get_milvus_client()
-        print("\n" + "=" * 60)
-        print("✅ 所有测试通过！")
-        print("=" * 60)
-    except Exception as e:
-        print(f"\n❌ 测试失败: {e}")
-        raise
-
-
-if __name__ == "__main__":
-    run_tests()

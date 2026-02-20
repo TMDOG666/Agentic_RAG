@@ -1,12 +1,5 @@
 """测试 Neo4j 客户端 (Neo4jClient)"""
 
-import os
-import sys
-from pathlib import Path
-
-project_root = Path(__file__).parent.parent.parent.parent
-sys.path.insert(0, str(project_root))
-
 from grag.config import initialize_config
 from grag.data_client.neo4j_client import Neo4jClient, get_neo4j_client
 
@@ -85,29 +78,3 @@ class TestNeo4jGlobalFunctions:
         assert client is not None
         assert isinstance(client, Neo4jClient)
         print("✅ get_neo4j_client 返回有效客户端")
-
-
-def run_tests():
-    print("\n" + "=" * 60)
-    print("开始测试 Neo4jClient 模块")
-    print("=" * 60)
-    t = TestNeo4jClient()
-    g = TestNeo4jGlobalFunctions()
-    try:
-        t.setup_method(); t.test_init()
-        t.setup_method(); t.test_get_config_info()
-        t.setup_method(); t.test_client_with_provider()
-        t.setup_method(); t.test_get_driver_requires_config()
-        t.setup_method(); t.test_test_connection()
-        t.setup_method(); t.test_close()
-        g.setup_method(); g.test_get_neo4j_client()
-        print("\n" + "=" * 60)
-        print("✅ 所有测试通过！")
-        print("=" * 60)
-    except Exception as e:
-        print(f"\n❌ 测试失败: {e}")
-        raise
-
-
-if __name__ == "__main__":
-    run_tests()
