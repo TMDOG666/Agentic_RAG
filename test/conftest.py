@@ -15,6 +15,32 @@ def pytest_addoption(parser):
         help="Skip cleanup for integration tests (leave DB data).",
     )
 
+    parser.addoption(
+        "--group-id",
+        action="store",
+        default="",
+    )
+    parser.addoption(
+        "--milvus-collection",
+        action="store",
+        default="",
+    )
+    parser.addoption(
+        "--keyword-q",
+        action="store",
+        default="",
+    )
+    parser.addoption(
+        "--semantic-q",
+        action="store",
+        default="",
+    )
+    parser.addoption(
+        "--graph-entity",
+        action="store",
+        default="",
+    )
+
 
 def get_real_docx_paths():
     from pathlib import Path
@@ -25,6 +51,10 @@ def get_real_docx_paths():
 
 
 def load_real_doc_texts(*, use_llm: bool = False):
+    from grag.config import initialize_config
+
+    initialize_config()
+
     try:
         __import__("docx")
     except ImportError as e:

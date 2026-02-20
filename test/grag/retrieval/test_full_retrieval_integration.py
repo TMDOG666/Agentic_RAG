@@ -91,8 +91,17 @@ def _cleanup_neo4j(*, group_id: str, doc_id: str) -> None:
 
 
 def _pick_keyword_query(text: str) -> str:
-    q = "".join([ch for ch in (text or "") if not ch.isspace()])
-    return (q[:8] or "检索")
+    t = (text or "").strip()
+    if not t:
+        return "检索"
+
+    # 关键词检索当前使用的是 Postgres ILIKE '%query%'（连续子串匹配）。
+    # 因此这里必须挑选“原文中存在的连续片段”，否则会出现入库成功但 keyword 命中为空的假失败。
+    for line in t.splitlines():
+        s = line.strip()
+        if s:
+            return s[:12]
+    return t[:12]
 
 
 def _pick_semantic_query(text: str) -> str:
@@ -177,6 +186,7 @@ def test_full_retrieval_with_real_db(real_doc_texts, pytestconfig) -> None:
         rm = RetrievalManager(milvus_collection_name=collection_name)
 
         keyword_q = _pick_keyword_query(example_chunk_text)
+        print("\n[Keyword] query=", repr(keyword_q))
         keyword_res = rm.search(
             group_id=group_id,
             query=keyword_q,
@@ -184,12 +194,18 @@ def test_full_retrieval_with_real_db(real_doc_texts, pytestconfig) -> None:
             top_k=10,
             rerank_enabled=False,
         )
+        print("[Keyword] hits=", len(keyword_res.keyword_hits))
+        for i, h in enumerate(keyword_res.keyword_hits[:3]):
+            print(
+                f"  - {i}: doc_id={h.doc_id} chunk_id={h.chunk_id} index={h.index} text={repr((h.text or '')[:120])}"
+            )
         assert isinstance(keyword_res.keyword_hits, list)
         assert len(keyword_res.keyword_hits) > 0
         assert all(h.group_id == group_id for h in keyword_res.keyword_hits)
         assert any(keyword_q.strip() in (h.text or "") for h in keyword_res.keyword_hits)
 
         semantic_q = _pick_semantic_query(example_chunk_text)
+        print("\n[Semantic] query=", repr(semantic_q))
         semantic_res = rm.search(
             group_id=group_id,
             query=semantic_q,
@@ -197,12 +213,18 @@ def test_full_retrieval_with_real_db(real_doc_texts, pytestconfig) -> None:
             top_k=10,
             rerank_enabled=False,
         )
+        print("[Semantic] hits=", len(semantic_res.semantic_hits))
+        for i, h in enumerate(semantic_res.semantic_hits[:3]):
+            print(
+                f"  - {i}: doc_id={h.doc_id} chunk_id={h.chunk_id} score={getattr(h, 'score', None)} doc_time={getattr(h, 'doc_time', None)} text={repr((h.text or '')[:120])}"
+            )
         assert isinstance(semantic_res.semantic_hits, list)
         assert len(semantic_res.semantic_hits) > 0
         assert all(h.group_id == group_id for h in semantic_res.semantic_hits)
 
         entity_name = _pick_graph_entity_name(group_id=group_id, doc_id=first_doc_id)
         if entity_name:
+            print("\n[Graph] entity_name=", repr(entity_name))
             graph_res = rm.search(
                 group_id=group_id,
                 query=entity_name,
@@ -211,6 +233,12 @@ def test_full_retrieval_with_real_db(real_doc_texts, pytestconfig) -> None:
                 graph_max_depth=2,
                 graph_limit=50,
             )
+            assert graph_res.graph is not None
+            print("[Graph] nodes=", len(graph_res.graph.nodes), "edges=", len(graph_res.graph.edges))
+            for i, n in enumerate(graph_res.graph.nodes[:5]):
+                print(
+                    f"  - {i}: name={repr(n.get('name'))} type={repr(n.get('type'))} desc={repr((n.get('description') or '')[:120])}"
+                )
             assert graph_res.graph is not None
             assert isinstance(graph_res.graph.nodes, list)
             assert isinstance(graph_res.graph.edges, list)

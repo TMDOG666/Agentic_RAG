@@ -12,7 +12,7 @@
 
 services:
   neo4j:
-    image: neo4j:5.26.0-community
+    image: neo4j:5-community
     container_name: grag-neo4j
     restart: unless-stopped
     environment:
@@ -52,7 +52,7 @@ services:
 
   # Milvus 依赖：对象存储
   milvus-minio:
-    image: minio/minio:RELEASE.2024-05-28T17-19-04Z
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
     container_name: grag-milvus-minio
     environment:
       MINIO_ACCESS_KEY: minioadmin
@@ -71,7 +71,7 @@ services:
 
   # Milvus 向量库（standalone，依赖上面两个服务）
   milvus:
-    image: milvusdb/milvus:v2.4.15
+    image: milvusdb/milvus:v2.6.11
     container_name: grag-milvus
     restart: unless-stopped
     command: ["milvus", "run", "standalone"]
@@ -95,6 +95,17 @@ services:
     depends_on:
       milvus-etcd: { condition: service_healthy }
       milvus-minio: { condition: service_healthy }
+
+  attu:
+    image: zilliz/attu:latest
+    container_name: grag-milvus-attu
+    restart: unless-stopped
+    environment:
+      MILVUS_URL: milvus:19530
+    ports:
+      - "8000:3000"
+    depends_on:
+      milvus: { condition: service_healthy }
 
   postgres:
     image: postgres:17
