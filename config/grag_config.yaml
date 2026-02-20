@@ -1,31 +1,51 @@
-# GraphRAG Configuration File
-# GraphRAG系统配置文件，包含LLM、向量模型、重排序模型、向量数据库、图数据库、关系数据库等配置
+# ============================================================================
+# GraphRAG Configuration File（GraphRAG 系统主配置）
+#
+# 本文件用于配置：
+# - LLM / Embedding / Reranker / Vision 等模型 Provider
+# - 向量数据库（Milvus / Qdrant / Pinecone 等）
+# - 图数据库（Neo4j / Nebula）
+# - 关系数据库（Postgres / MySQL / SQLite）
+# - 预处理、分块、实体关系抽取、指代消解、融合、检索等系统行为
+#
+# 重要约定：
+# - 任何 API Key / 密码建议用 *_env 指向环境变量名，避免明文写入仓库。
+# - provider 选择项（例如 llm_provider）必须与对应的 *_providers 下 key 匹配。
+# - embedding 的 dimension 必须与向量库 collection schema 一致；更换 embedding 模型时要迁移或换 collection。
+# ============================================================================
 
-# 默认使用的LLM提供商
+# 默认使用的 LLM 提供商（必须存在于 llm_providers 下）
 llm_provider: siliconflow
 
-# 默认使用的向量嵌入模型提供商
+# 默认使用的向量嵌入模型提供商（必须存在于 embedding_providers 下）
 embedding_provider: siliconflow
 
-# 默认使用的重排序模型提供商（可选）
+# 默认使用的重排序模型提供商（可选；必须存在于 reranker_providers 下）
 reranker_provider: siliconflow
 
-# 默认使用的视觉模型提供商（用于OCR和图像理解）
+# 默认使用的视觉模型提供商（用于 OCR / 图像理解；必须存在于 vision_providers 下）
 vision_provider: siliconflow
 
-# 默认使用的向量数据库
+# 默认使用的向量数据库（必须存在于 vector_databases 下）
 vector_db_provider: milvus
 
-# 默认使用的图数据库
+# 默认使用的图数据库（必须存在于 graph_databases 下）
 graph_db_provider: neo4j
 
-# 默认使用的关系数据库
+# 默认使用的关系数据库（必须存在于 relational_databases 下）
 relational_db_provider: postgres
 
 # ============================================================================
 # LLM 提供商配置
 # ============================================================================
 llm_providers:
+  # 说明（通用字段）：
+  # - model: 模型名称（不同 provider 语义不同；对 OpenAI 兼容接口通常是 model id）
+  # - base_url: OpenAI 兼容 API 根地址（通常以 /v1 结尾）
+  # - api_key_env: 保存 API Key 的环境变量名（运行时从环境变量读取）
+  # - temperature: 生成随机性
+  # - max_tokens: 单次输出上限（不同 provider 可能含义略有差异）
+  # - timeout: 请求超时（秒）
   siliconflow:
     model: Qwen/Qwen3-Next-80B-A3B-Instruct
     base_url: https://api.siliconflow.cn/v1
@@ -70,6 +90,8 @@ llm_providers:
 # 视觉模型提供商配置（用于OCR和图像理解）
 # ============================================================================
 vision_providers:
+  # 说明：Vision 通常用于 OCR、图像理解、多模态问答等。
+  # 若你不使用 vision 功能，可以保留配置但在业务侧不启用调用。
   siliconflow:
     model: Qwen/Qwen3-VL-30B-A3B-Instruct
     base_url: https://api.siliconflow.cn/v1
@@ -90,6 +112,11 @@ vision_providers:
 # 向量嵌入模型提供商配置
 # ============================================================================
 embedding_providers:
+  # 说明（重点）：
+  # - dimension 必须与向量库 collection 的 schema 一致。
+  #   例如：这里 siliconflow 的 BGE-M3 dimension=1024。
+  #   如果你把 embedding_provider 切到 openai(3072)，而 collection 仍是 1024，会出现 schema/dim mismatch。
+  # - max_batch_size 与 provider 的限流/接口能力相关；过大可能触发 413 或超时。
   siliconflow:
     model: BAAI/bge-m3
     base_url: https://api.siliconflow.cn/v1
@@ -126,6 +153,8 @@ embedding_providers:
 # 重排序模型提供商配置（可选）
 # ============================================================================
 reranker_providers:
+  # 说明：reranker 用于对召回结果二次排序（提高相关性）。
+  # - top_k: rerank 参与的候选数量
   siliconflow:
     model: BAAI/bge-reranker-v2-m3
     base_url: https://api.siliconflow.cn/v1
@@ -144,12 +173,17 @@ reranker_providers:
 # 向量数据库配置
 # ============================================================================
 vector_databases:
+  # 说明：
+  # - collection_name: 向量集合/索引名称。更换 embedding dimension 或 schema 时，建议换新 collection 或做迁移。
+  # - metric_type / distance / metric: 相似度度量（与 embedding 模型通常匹配 Cosine）。
+  # - index_type: Milvus 索引类型（IVF_FLAT/IVF_SQ8/HNSW 等），不同索引影响构建速度与召回质量。
   milvus:
     host: localhost
     port: 19530
     user: null
     password: null
     db_name: default
+    # collection_name 建议在“不同测试/不同环境/不同 embedding 维度”下分开，避免 schema 冲突。
     collection_name: grag_documents
     index_type: IVF_FLAT
     metric_type: COSINE
@@ -177,9 +211,13 @@ vector_databases:
 # 图数据库配置
 # ============================================================================
 graph_databases:
+  # 说明：
+  # - Neo4j：适合属性图（实体/关系），本项目默认使用。
+  # - Nebula：可选图数据库。
   neo4j:
     uri: bolt://localhost:7687
     user: neo4j
+    # 建议：生产环境用 password_env 指向环境变量名，避免明文密码。
     password: neo4j123456
     database: neo4j
     connection_timeout: 30
@@ -197,11 +235,15 @@ graph_databases:
 # 关系数据库配置
 # ============================================================================
 relational_databases:
+  # 说明：
+  # - Postgres：默认使用（存 document/chunk/entity 元信息，便于审计/检索/跨文档融合候选读取）。
+  # - schema: 默认为 public；如果你用多租户或隔离 schema，可在此调整。
   postgres:
     host: localhost
     port: 5430
     database: grag
     user: postgres
+    # 建议：生产环境用 password_env 指向环境变量名，避免明文密码。
     password: postgres123
     schema: public
     connection_timeout: 30
@@ -258,6 +300,9 @@ system:
 
   # 性能配置
   performance:
+    # max_workers: 并发 worker 数（影响分块、抽取、融合并发；过大可能触发 API 限流或本机资源不足）
+    # batch_size: 批处理大小（embedding/rerank 可能受该值影响）
+    # chunk_size/overlap_size: 仅对部分简单 chunking 策略生效；语义分块策略以 graph_construction.chunking 为主。
     max_workers: 4
     batch_size: 32
     chunk_size: 512
@@ -276,9 +321,13 @@ preprocessing:
     lowercase: false
 
   document_processing:
+    # 支持的文档格式
     supported_formats: [pdf, docx, txt, md, html]
+    # 最大文档大小
     max_file_size: 50MB
+    # 编码格式
     encoding: utf-8
+    # 是否提取元数据
     extract_metadata: true
 
 # ============================================================================
@@ -286,12 +335,22 @@ preprocessing:
 # ============================================================================
 graph_construction:
   chunking:
+    # strategy: 分块策略
+    # - semantic_recursive_greedy: 语义/标题递归 + 贪心合并（更适合长文档、中文大纲/年报类结构）
+    # max_token_threshold/min_token_threshold: 目标 chunk token 区间（依赖 token 估算器，可能与实际模型略偏差）
+    # enable_fallback: 语义/标题分块失败时是否启用 fallback
     strategy: semantic_recursive_greedy
     max_token_threshold: 1500
     min_token_threshold: 1000
     preserve_headings: true
     enable_fallback: true
+    # fallback_split_order: fallback 分块顺序
+    # - "\n\n": 两个换行符
+    # - "\n": 一个换行符
+    # - "sentence": 句子
+    # - "fixed_step": 固定步长
     fallback_split_order: ["\n\n", "\n", "sentence", "fixed_step"]
+    # fallback_fixed_step_chars: 固定步长的字符数
     fallback_fixed_step_chars: 1200
     chunk_size: 512
     overlap: 0
@@ -318,6 +377,7 @@ graph_construction:
 
   entity_relation_extraction:
     enabled: true
+    # model_provider: 用于实体关系抽取的 LLM provider（默认 siliconflow；可改为 openai/vllm 等）
     model_provider: siliconflow
     confidence_threshold: 0.7
     max_entities_per_chunk: 10
@@ -328,6 +388,7 @@ graph_construction:
 
   coreference_resolution:
     enabled: true
+    # model_provider: 用于指代消解的 LLM provider
     model_provider: siliconflow
     max_distance: 5
     bench_num: 4
@@ -359,6 +420,7 @@ retrieval:
     max_depth: 3
     max_paths: 5
     relationship_weight: 0.8
+    rerank_enabled: true
 
   fusion_search:
     enabled: true

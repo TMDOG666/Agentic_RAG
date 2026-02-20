@@ -208,3 +208,73 @@ class MilvusVectorRepository:
         data = [pks, group_ids, doc_ids, doc_times, chunk_ids, vecs]
         col.insert(data)
         col.flush()
+
+
+    def search_chunk_embeddings(
+        self,
+        *,
+        group_id: str,
+        query_vector: Sequence[float],
+        top_k: int = 10,
+        doc_time_start: Optional[str] = None,
+        doc_time_end: Optional[str] = None,
+        doc_id: Optional[str] = None,
+        output_fields: Optional[Sequence[str]] = None,
+    ) -> List[dict]:
+        """向量检索（chunk 级）。
+
+        约束：
+        - group_id 必填，避免不同组混检。
+        - doc_time 过滤使用字符串比较表达式，因此 doc_time 建议使用 ISO8601。
+        """
+        if not str(group_id).strip():
+            raise ValueError("group_id is required")
+        qv = list(query_vector)
+        if not qv:
+            return []
+
+        pymilvus = self._ensure_pymilvus()
+        self._client.connect()
+
+        name = self._collection_name()
+        if not pymilvus.utility.has_collection(name, using=self._client._alias):
+            return []
+
+        col = pymilvus.Collection(name=name, using=self._client._alias)
+
+        expr_parts = [f'group_id == "{group_id}"']
+        if doc_id:
+            expr_parts.append(f'doc_id == "{doc_id}"')
+        if doc_time_start:
+            expr_parts.append(f'doc_time >= "{doc_time_start}"')
+        if doc_time_end:
+            expr_parts.append(f'doc_time <= "{doc_time_end}"')
+        expr = " and ".join(expr_parts)
+
+        fields = list(output_fields) if output_fields is not None else ["pk", "group_id", "doc_id", "doc_time", "chunk_id"]
+
+        # metric_type 以 collection index 的配置为准；这里不强制覆写。
+        res = col.search(
+            data=[qv],
+            anns_field="embedding",
+            param={"nprobe": 16},
+            limit=int(top_k),
+            expr=expr,
+            output_fields=fields,
+            consistency_level="Strong",
+        )
+
+        out: List[dict] = []
+        for hits in res:
+            for h in hits:
+                entity = getattr(h, "entity", None)
+                row = {}
+                if entity is not None:
+                    for f in fields:
+                        try:
+                            row[f] = entity.get(f)
+                        except Exception:
+                            pass
+                row["score"] = float(getattr(h, "score", 0.0))
+                out.append(row)
+        return out

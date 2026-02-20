@@ -1,5 +1,3 @@
-# Graph Construction Manager Module
-
 import asyncio
 import uuid
 from dataclasses import dataclass

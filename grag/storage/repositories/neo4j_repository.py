@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Optional, Sequence
 
 from grag.data_client.neo4j_client import Neo4jClient
 
@@ -165,3 +165,100 @@ class Neo4jGraphRepository:
         else:
             with driver.session() as session:
                 session.execute_write(_run)
+
+
+    def search_entity_subgraph(
+        self,
+        *,
+        group_id: str,
+        entity_name: str,
+        max_depth: int = 2,
+        limit: int = 50,
+        doc_id: Optional[str] = None,
+    ) -> dict:
+        """按实体名/别名检索，并扩展一定跳数的关系子图。
+
+        返回：
+        - nodes: Document/Entity 节点列表（仅包含常用字段）
+        - edges: 关系边列表
+
+        说明：
+        - 本项目实体节点是 doc 级（包含 doc_id），因此默认会在同一个 doc 内扩展。
+        - 如果你希望跨 doc 扩展，需要引入全局实体或跨文档对齐关系；当前先做最小可用。
+        """
+        if not str(group_id).strip():
+            raise ValueError("group_id is required")
+        if not str(entity_name or "").strip():
+            return {"nodes": [], "edges": []}
+
+        driver = self._client.get_driver()
+        db = self._get_database()
+
+        depth = max(1, int(max_depth))
+        lim = int(limit)
+
+        where_doc = ""
+        if doc_id:
+            where_doc = "AND e.doc_id = $doc_id"
+
+        cypher = (
+            "MATCH (e:Entity {group_id: $group_id}) "
+            "WHERE (e.name = $name OR $name IN e.aliases) "
+            + where_doc
+            + " WITH e LIMIT 20 "
+            f"MATCH p=(e)-[r:REL*1..{depth}]-(x) "
+            "RETURN p LIMIT $limit"
+        )
+
+        def _run(tx):
+            return list(
+                tx.run(
+                    cypher,
+                    group_id=group_id,
+                    name=entity_name,
+                    doc_id=doc_id,
+                    limit=lim,
+                )
+            )
+
+        if db:
+            with driver.session(database=db) as session:
+                records = session.execute_read(_run)
+        else:
+            with driver.session() as session:
+                records = session.execute_read(_run)
+
+        nodes: dict[str, dict] = {}
+        edges: list[dict] = []
+
+        for rec in records:
+            p = rec.get("p")
+            if p is None:
+                continue
+            for n in p.nodes:
+                labels = list(n.labels)
+                key = f"{labels}:{n.get('group_id')}:{n.get('doc_id')}:{n.get('name', n.get('doc_id', ''))}"
+                if key not in nodes:
+                    nodes[key] = {
+                        "labels": labels,
+                        "group_id": n.get("group_id"),
+                        "doc_id": n.get("doc_id"),
+                        "name": n.get("name"),
+                        "type": n.get("type"),
+                        "description": n.get("description"),
+                        "aliases": n.get("aliases"),
+                        "doc_name": n.get("doc_name"),
+                        "doc_time": n.get("doc_time"),
+                    }
+            for r in p.relationships:
+                edges.append(
+                    {
+                        "type": r.get("type") or r.type,
+                        "description": r.get("description"),
+                        "confidence": r.get("confidence"),
+                        "group_id": r.get("group_id"),
+                        "doc_id": r.get("doc_id"),
+                    }
+                )
+
+        return {"nodes": list(nodes.values()), "edges": edges}

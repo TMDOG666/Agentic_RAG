@@ -44,6 +44,66 @@
  
  ---
  
+ ## 检索（Retrieval）与重排序（Rerank）用法（grag/retrieval）
+ 
+ 本仓库在 `grag/retrieval/` 下提供了一个统一检索入口 `RetrievalManager`，用于把三种基础检索模式封装成同一个 `search()`。
+ 
+ ### 1) 三种检索模式
+ 
+ - **keyword**：Postgres chunk 文本 ILIKE 匹配（适合专有名词/编号/精确短语）
+ - **semantic**：Embedding + Milvus 向量检索（适合语义相似但表述不一致）
+ - **graph**：Neo4j 实体子图扩展（适合关系链/多跳关联）
+ 
+ 共同约束：
+ - **group_id 必填**：用于数据隔离。
+ - chunk 类检索（keyword/semantic）支持可选 `doc_time_start/doc_time_end` 过滤。
+ 
+ ### 2) 代码调用示例
+ 
+ ```python
+ from grag.retrieval import RetrievalManager
+ 
+ rm = RetrievalManager()
+ 
+ res = rm.search(
+     group_id="group_001",
+     query="智云科技 2024 年度报告",
+     modes=["keyword", "semantic"],
+     top_k=10,
+     # 可选：按文档时间过滤（建议 ISO8601）
+     doc_time_start="2026-01-01T00:00:00+00:00",
+     doc_time_end="2026-12-31T23:59:59+00:00",
+     # 可选：启用重排序（对 keyword/semantic 的 chunk 结果生效）
+     rerank_enabled=True,
+     # 可选：指定重排序 provider；None 表示用 grag_config.yaml 的默认 reranker_provider
+     rerank_provider=None,
+ )
+ 
+ print(len(res.keyword_hits), len(res.semantic_hits))
+ ```
+ 
+ ### 3) 如何启用/切换重排序（rerank）
+ 
+ 重排序依赖 `grag_config.yaml` 的以下配置：
+ 
+ - `reranker_provider`: 默认重排序提供商（可选）
+ - `reranker_providers`: 提供商配置表（包含 model/base_url/api_key_env/top_k 等）
+ 
+ 你也可以用环境变量覆盖（优先级更高，详见 `grag/model/reranker_client.py`）：
+ 
+ - `GRAG_RERANKER_PROVIDER`
+ - `GRAG_RERANKER_MODEL`
+ - `GRAG_RERANKER_BASE_URL`
+ - `GRAG_RERANKER_API_KEY`
+ 
+ 注意：
+ - **未配置 reranker 或调用失败时会自动降级**为原始顺序，保证检索主流程可用。
+ - 当 `rerank_enabled=True` 时：
+   - keyword/semantic：对 chunk 列表重排序
+   - graph：对返回子图中的 `nodes` 列表重排序（`edges` 不变）
+
+---
+ 
  ## 📁 项目结构（核心目录）
  
  ```

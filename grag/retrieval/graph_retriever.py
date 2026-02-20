@@ -1,1 +1,0 @@
-# Graph-based Entity-Relation Retrieval Module

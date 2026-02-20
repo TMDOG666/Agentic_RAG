@@ -1,30 +1,73 @@
+# ============================================================================
+# Agent LLM Provider 配置（用于“agent”侧的大模型调用）
+#
+# 使用方式：
+# - `provider` 指定默认使用哪个 provider（必须是 `providers` 下的某个 key）。
+# - 每个 provider 一般都遵循 OpenAI Chat Completions 兼容接口（`/v1`）。
+# - `api_key_env` 仅保存“环境变量名”，不要把 key 明文写进仓库。
+#
+# 常见选择：
+# - `vllm`：自建/局域网 vLLM 服务（OpenAI 兼容），速度快、成本低。
+# - `ollama` / `lmstudio`：本机/局域网本地模型，适合开发调试。
+# - `openai_compatible` / `siliconflow`：公网 API，需配置对应 API Key。
+# ============================================================================
+
+# 默认 provider 名称：必须与 `providers` 下的一级 key 对应。
 provider: vllm
 
+# 所有可用 provider 的配置表。
 providers:
+  # --------------------------------------------------------------------------
+  # SiliconFlow（公网 API）
+  # - base_url 通常是官方提供的 OpenAI 兼容入口
+  # - api_key_env 指向你本机/CI 环境变量中的 key
+  # --------------------------------------------------------------------------
   siliconflow:
     model: Qwen/Qwen3-Next-80B-A3B-Instruct
     base_url: https://api.siliconflow.cn/v1
     api_key_env: SILICONFLOW_API_KEY
     temperature: 0
 
+  # --------------------------------------------------------------------------
+  # OpenAI 官方（或任何“OpenAI 兼容”的公网服务）
+  # - model 示例：gpt-4o-mini（仅示例，你可以替换为你账户可用的模型）
+  # - base_url 若指向 OpenAI 官方，通常为 https://api.openai.com/v1
+  # - api_key_env 通常为 OPENAI_API_KEY
+  # --------------------------------------------------------------------------
   openai_compatible:
     model: gpt-4o-mini
     base_url: https://api.openai.com/v1
     api_key_env: OPENAI_API_KEY
     temperature: 0
 
+  # --------------------------------------------------------------------------
+  # vLLM（自建/局域网 OpenAI 兼容服务）
+  # - base_url 指向你部署的 vLLM OpenAI server 地址
+  # - 多数 vLLM 部署不会校验 api key，但配置项仍保留以兼容统一接口
+  # - 若你的 vLLM 启用了鉴权，请确保对应环境变量存在
+  # --------------------------------------------------------------------------
   vllm:
     model: Qwen3-Next-80B-A3B
     base_url: http://192.168.1.220:8000/v1
     api_key_env: OPENAI_API_KEY
     temperature: 0
 
+  # --------------------------------------------------------------------------
+  # Ollama（本机/局域网本地模型）
+  # - 注意：这里使用的是“OpenAI 兼容”模式的入口：/v1
+  # - model 示例：qwen2.5:7b-instruct（以你本机已拉取的模型为准）
+  # --------------------------------------------------------------------------
   ollama:
     model: qwen2.5:7b-instruct
     base_url: http://127.0.0.1:11434/v1
     api_key_env: OPENAI_API_KEY
     temperature: 0
 
+  # --------------------------------------------------------------------------
+  # LM Studio（本机/局域网本地模型）
+  # - LM Studio 通常也提供 OpenAI 兼容接口（/v1）
+  # - 若你在 LM Studio 内开启了“Require API Key”，则需要设置 api_key_env
+  # --------------------------------------------------------------------------
   lmstudio:
     model: local-model
     base_url: http://127.0.0.1:1234/v1

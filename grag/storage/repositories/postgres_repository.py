@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Optional, Sequence
 
 from grag.data_client.postgres_client import PostgresClient
 
@@ -90,6 +90,129 @@ class PostgresGraphRepository:
                 with conn.cursor() as cur:
                     for sql in ddl:
                         cur.execute(sql)
+        finally:
+            conn.close()
+
+
+    def search_chunks_by_keyword(
+        self,
+        *,
+        group_id: str,
+        query: str,
+        limit: int = 20,
+        doc_id: Optional[str] = None,
+        doc_time_start: Optional[str] = None,
+        doc_time_end: Optional[str] = None,
+    ) -> Sequence[ChunkRecord]:
+        """关键词检索：在 chunk 文本中做 ILIKE 匹配。
+
+        注意：
+        - group_id 必须传入，用于避免不同组数据混淆。
+        - doc_time 过滤通过 JOIN grag_documents 实现。
+        - doc_time 建议使用 ISO8601（字符串比较才有意义）。
+        """
+        if not str(group_id).strip():
+            raise ValueError("group_id is required")
+        if not str(query or "").strip():
+            return []
+
+        self.ensure_schema()
+
+        q = f"%{query}%"
+        where = ["c.group_id = %s", "c.text ILIKE %s"]
+        params: list[object] = [group_id, q]
+
+        if doc_id:
+            where.append("c.doc_id = %s")
+            params.append(doc_id)
+        if doc_time_start:
+            where.append("d.doc_time >= %s")
+            params.append(doc_time_start)
+        if doc_time_end:
+            where.append("d.doc_time <= %s")
+            params.append(doc_time_end)
+
+        sql = (
+            "SELECT c.doc_id, c.chunk_id, c.chunk_index, c.text, d.doc_time "
+            "FROM grag_chunks c "
+            "JOIN grag_documents d ON d.group_id = c.group_id AND d.doc_id = c.doc_id "
+            f"WHERE {' AND '.join(where)} "
+            "ORDER BY c.doc_id DESC, c.chunk_index ASC "
+            "LIMIT %s;"
+        )
+        params.append(int(limit))
+
+        conn = self._client.get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(sql, tuple(params))
+                    rows = cur.fetchall()
+
+            out: list[ChunkRecord] = []
+            for doc_id_v, chunk_id, idx, text, _doc_time in rows:
+                out.append(
+                    ChunkRecord(
+                        group_id=str(group_id),
+                        doc_id=str(doc_id_v),
+                        chunk_id=str(chunk_id),
+                        index=int(idx),
+                        text=str(text),
+                    )
+                )
+            return out
+        finally:
+            conn.close()
+
+
+    def get_chunks_by_ids(
+        self,
+        *,
+        group_id: str,
+        chunk_ids: Sequence[str],
+    ) -> Sequence[ChunkRecord]:
+        """按 chunk_id 批量读取 chunk 文本。
+
+        用途：
+        - Milvus 搜到 chunk_id 后，需要回表拿 chunk 文本。
+        """
+        if not str(group_id).strip():
+            raise ValueError("group_id is required")
+        ids = [str(x) for x in chunk_ids if str(x).strip()]
+        if not ids:
+            return []
+
+        self.ensure_schema()
+
+        placeholders = ",".join(["%s"] * len(ids))
+        sql = (
+            "SELECT doc_id, chunk_id, chunk_index, text "
+            "FROM grag_chunks "
+            "WHERE group_id = %s AND chunk_id IN ("
+            + placeholders
+            + ")"
+        )
+        params: list[object] = [group_id] + ids
+
+        conn = self._client.get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(sql, tuple(params))
+                    rows = cur.fetchall()
+
+            by_id: dict[str, ChunkRecord] = {}
+            for doc_id_v, chunk_id, idx, text in rows:
+                by_id[str(chunk_id)] = ChunkRecord(
+                    group_id=str(group_id),
+                    doc_id=str(doc_id_v),
+                    chunk_id=str(chunk_id),
+                    index=int(idx),
+                    text=str(text),
+                )
+
+            # 保持输入顺序
+            return [by_id[cid] for cid in ids if cid in by_id]
         finally:
             conn.close()
 
