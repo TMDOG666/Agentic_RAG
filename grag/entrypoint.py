@@ -38,6 +38,7 @@ class BuildOptions:
 
     milvus_collection_name: Optional[str] = None
     milvus_upsert_strategy: str = "delete_then_insert"
+    milvus_graph_index_collection_name: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,7 @@ class QueryOptions:
     """
 
     milvus_collection_name: Optional[str] = None
+    milvus_graph_index_collection_name: Optional[str] = None
 
 
 class GRAG:
@@ -86,7 +88,8 @@ class GRAG:
 
         self._build_options = build_options or BuildOptions()
         self._query_options = query_options or QueryOptions(
-            milvus_collection_name=self._build_options.milvus_collection_name
+            milvus_collection_name=self._build_options.milvus_collection_name,
+            milvus_graph_index_collection_name=self._build_options.milvus_graph_index_collection_name,
         )
 
     def build_kg(
@@ -99,6 +102,7 @@ class GRAG:
         doc_id: Optional[str] = None,
         milvus_collection_name: Optional[str] = None,
         milvus_upsert_strategy: Optional[str] = None,
+        milvus_graph_index_collection_name: Optional[str] = None,
     ) -> GraphBuildResult:
         """构建知识图谱并落库（GraphBuilder.build_and_save 的 Facade）。
 
@@ -112,6 +116,7 @@ class GRAG:
         - doc_id: 若不传，内部会生成并写入（同时影响 chunk_id 前缀）
         - milvus_collection_name: 本次写入使用的 Milvus collection（覆盖默认值）
         - milvus_upsert_strategy: Milvus 写入策略（覆盖默认值）
+        - milvus_graph_index_collection_name: 本次写入使用的 Milvus graph index collection（覆盖默认值）
 
         Returns:
             GraphBuildResult：包含 construction 流程结果 + 入库的 document/chunks/embeddings/entities/relations。
@@ -127,8 +132,13 @@ class GRAG:
         if upsert is None:
             upsert = self._build_options.milvus_upsert_strategy
 
+        graph_index_collection = milvus_graph_index_collection_name
+        if graph_index_collection is None:
+            graph_index_collection = getattr(self._build_options, "milvus_graph_index_collection_name", None)
+
         storage = DataClientGraphStorage(
             milvus_collection_name=collection,
+            milvus_graph_index_collection_name=graph_index_collection,
             milvus_upsert_strategy=upsert,
         )
         builder = GraphBuilder(storage=storage)
@@ -156,6 +166,7 @@ class GRAG:
         graph_max_depth: int = 2,
         graph_limit: int = 50,
         milvus_collection_name: Optional[str] = None,
+        milvus_graph_index_collection_name: Optional[str] = None,
     ) -> RetrievalResult:
         """查询检索入口（RetrievalManager.search 的 Facade）。
 
@@ -167,10 +178,17 @@ class GRAG:
                 用户查询。
 
             modes:
-                检索模式列表，常见值："keyword" / "semantic" / "graph"。
+                检索模式列表。
+
+                基础模式：
                 - keyword：Postgres ILIKE 文本匹配
                 - semantic：embedding + Milvus 向量检索 + Postgres 回填 chunk 文本
-                - graph：Neo4j 子图扩展（当前实现以 entity_name/alias 为入口）
+                - vector/native：semantic 的别名（便于对齐“向量检索(native)”说法）
+                - graph：Neo4j 子图扩展（以 entity_name/alias 为入口）
+
+                LightRAG 风格模式：
+                - local：低层关键词（规则拆分的 low）驱动的 graph 检索
+                - global：高层关键词（规则拆分的 high）驱动的 graph 检索
 
             top_k:
                 返回条数（各检索模式会以自己的方式使用 top_k）。
@@ -189,21 +207,40 @@ class GRAG:
             milvus_collection_name:
                 semantic 检索使用的 Milvus collection（覆盖默认值）。
 
+            milvus_graph_index_collection_name:
+                semantic 检索使用的 Milvus graph index collection（覆盖默认值）。
+
         Returns:
             RetrievalResult：包含 keyword_hits / semantic_hits / graph（三者的组合）。
         """
 
         initialize_config()
 
+        normalized_modes: list[str] = []
+        for m in (modes or []):
+            s = str(m).strip().lower()
+            if not s:
+                continue
+            if s in {"native", "vector"}:
+                s = "vector"
+            normalized_modes.append(s)
+
         collection = milvus_collection_name
         if collection is None:
             collection = self._query_options.milvus_collection_name
 
-        rm = RetrievalManager(milvus_collection_name=collection)
+        graph_index_collection = milvus_graph_index_collection_name
+        if graph_index_collection is None:
+            graph_index_collection = getattr(self._query_options, "milvus_graph_index_collection_name", None)
+
+        rm = RetrievalManager(
+            milvus_collection_name=collection,
+            milvus_graph_index_collection_name=graph_index_collection,
+        )
         return rm.search(
             group_id=group_id,
             query=query,
-            modes=list(modes),
+            modes=normalized_modes,
             top_k=int(top_k),
             doc_id=doc_id,
             doc_time_start=doc_time_start,

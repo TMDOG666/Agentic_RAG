@@ -16,6 +16,7 @@ from .types import (
     ChunkRecord,
     ChunkEmbeddingRecord,
     GraphEntityRecord,
+    GraphIndexRecord,
     GraphRelationRecord,
 )
 from .protocol import GraphStorage
@@ -26,6 +27,7 @@ __all__ = [
     "ChunkRecord",
     "ChunkEmbeddingRecord",
     "GraphEntityRecord",
+    "GraphIndexRecord",
     "GraphRelationRecord",
     "GraphStorage",
     "DataClientGraphStorage",

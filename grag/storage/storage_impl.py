@@ -5,12 +5,18 @@ from typing import Optional, Sequence
 from grag.data_client import DataManager, get_data_manager
 
 from .protocol import GraphStorage
-from .repositories import MilvusVectorRepository, Neo4jGraphRepository, PostgresGraphRepository
+from .repositories import (
+    MilvusGraphIndexRepository,
+    MilvusVectorRepository,
+    Neo4jGraphRepository,
+    PostgresGraphRepository,
+)
 from .types import (
     ChunkEmbeddingRecord,
     ChunkRecord,
     DocumentRecord,
     GraphEntityRecord,
+    GraphIndexRecord,
     GraphRelationRecord,
 )
 
@@ -47,6 +53,7 @@ class DataClientGraphStorage(GraphStorage):
         *,
         data_manager: Optional[DataManager] = None,
         milvus_collection_name: Optional[str] = None,
+        milvus_graph_index_collection_name: Optional[str] = None,
         milvus_upsert_strategy: str = "insert_only",
     ) -> None:
         self._data_manager = data_manager or get_data_manager()
@@ -54,6 +61,15 @@ class DataClientGraphStorage(GraphStorage):
         self._milvus_repo = MilvusVectorRepository(
             self._data_manager.get_milvus_client(),
             collection_name=milvus_collection_name,
+            upsert_strategy=milvus_upsert_strategy,
+        )
+
+        # graph_index collection（独立于 chunk embeddings）：
+        # - 默认名给一个稳定值，避免用户忘记配置导致无法落库。
+        # - 如果你希望更强的隔离（如按 group 创建不同 graph_index collection），可以在上层传入 override。
+        self._graph_index_repo = MilvusGraphIndexRepository(
+            self._data_manager.get_milvus_client(),
+            collection_name=str(milvus_graph_index_collection_name or "grag_graph_index"),
             upsert_strategy=milvus_upsert_strategy,
         )
         self._neo4j_repo = Neo4jGraphRepository(self._data_manager.get_neo4j_client())
@@ -66,6 +82,7 @@ class DataClientGraphStorage(GraphStorage):
         embeddings: Sequence[ChunkEmbeddingRecord],
         entities: Sequence[GraphEntityRecord],
         relations: Sequence[GraphRelationRecord],
+        graph_index_records: Sequence[GraphIndexRecord],
     ) -> None:
         """落库单篇文档对应的全部资产。
 
@@ -85,11 +102,16 @@ class DataClientGraphStorage(GraphStorage):
             document=document,
             chunks=chunks,
             entities=entities,
+            relations=relations,
         )
         self._milvus_repo.upsert_chunk_embeddings(
             document=document,
             embeddings=embeddings,
         )
+
+        # graph_index：实体/关系向量写入
+        self._graph_index_repo.upsert_records(records=graph_index_records)
+
         self._neo4j_repo.upsert_graph(
             document=document,
             entities=entities,

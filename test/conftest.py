@@ -36,9 +36,62 @@ def pytest_addoption(parser):
         default="",
     )
     parser.addoption(
+        "--native-q",
+        action="store",
+        default="",
+    )
+    parser.addoption(
+        "--local-q",
+        action="store",
+        default="",
+    )
+    parser.addoption(
+        "--global-q",
+        action="store",
+        default="",
+    )
+
+    parser.addoption(
+        "--print-results",
+        action="store_true",
+        default=False,
+        help="Print full retrieval results (JSON) for integration tests. Use with -s to see output.",
+    )
+    parser.addoption(
         "--graph-entity",
         action="store",
         default="",
+    )
+
+    parser.addoption(
+        "--pipeline-ingest",
+        action="store_true",
+        default=False,
+        help="Run ingestion step in the full pipeline integration test (build_kg).",
+    )
+    parser.addoption(
+        "--pipeline-cleanup",
+        action="store_true",
+        default=False,
+        help="Force cleanup step in the full pipeline integration test (overrides --no-cleanup).",
+    )
+    parser.addoption(
+        "--pipeline-modes",
+        action="store",
+        default="keyword,semantic,native,graph,local,global",
+        help="Comma-separated retrieval modes to run in the full pipeline integration test.",
+    )
+    parser.addoption(
+        "--pipeline-docs",
+        action="store",
+        default="2",
+        help="Number of documents to ingest for the full pipeline integration test (default: 2).",
+    )
+    parser.addoption(
+        "--pipeline-graph-index-collection",
+        action="store",
+        default="",
+        help="Milvus graph_index collection name (default: grag_graph_index).",
     )
 
 

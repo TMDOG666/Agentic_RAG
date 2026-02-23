@@ -1,5 +1,5 @@
 from grag.storage.repositories.postgres_repository import PostgresGraphRepository
-from grag.storage.types import ChunkRecord, DocumentRecord, GraphEntityRecord
+from grag.storage.types import ChunkRecord, DocumentRecord, GraphEntityRecord, GraphRelationRecord
 
 from grag.config import initialize_config
 from grag.data_client import get_data_manager
@@ -11,6 +11,10 @@ def _cleanup_postgres(*, group_id: str, doc_id: str) -> None:
     try:
         with conn:
             with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM grag_relations WHERE group_id=%s AND doc_id=%s",
+                    (group_id, doc_id),
+                )
                 cur.execute(
                     "DELETE FROM grag_entities WHERE group_id=%s AND doc_id=%s",
                     (group_id, doc_id),
@@ -57,6 +61,7 @@ class TestPostgresGraphRepositoryRealDB:
             ]
             entities = [
                 GraphEntityRecord(
+                    entity_id=f"{group_id}:{doc_id}:e0",
                     group_id=group_id,
                     doc_id=doc_id,
                     canonical_name="张三",
@@ -65,6 +70,18 @@ class TestPostgresGraphRepositoryRealDB:
                     description="desc",
                 )
             ]
-            repo.upsert_document_and_chunks(document=doc, chunks=chunks, entities=entities)
+            relations = [
+                GraphRelationRecord(
+                    relation_id=f"{group_id}:{doc_id}:r0",
+                    group_id=group_id,
+                    doc_id=doc_id,
+                    subject="张三",
+                    object="张三",
+                    relation_type="self",
+                    description="desc",
+                    confidence=8,
+                )
+            ]
+            repo.upsert_document_and_chunks(document=doc, chunks=chunks, entities=entities, relations=relations)
         finally:
             _cleanup_postgres(group_id=group_id, doc_id=doc_id)

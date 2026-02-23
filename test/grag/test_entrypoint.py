@@ -25,9 +25,16 @@ def test_grag_build_kg_wires_storage_and_builder(monkeypatch: pytest.MonkeyPatch
         called["init"] += 1
 
     class FakeStorage:
-        def __init__(self, *, milvus_collection_name=None, milvus_upsert_strategy=None):
+        def __init__(
+            self,
+            *,
+            milvus_collection_name=None,
+            milvus_graph_index_collection_name=None,
+            milvus_upsert_strategy=None,
+        ):
             called["storage"] = {
                 "milvus_collection_name": milvus_collection_name,
+                "milvus_graph_index_collection_name": milvus_graph_index_collection_name,
                 "milvus_upsert_strategy": milvus_upsert_strategy,
             }
 
@@ -54,7 +61,11 @@ def test_grag_build_kg_wires_storage_and_builder(monkeypatch: pytest.MonkeyPatch
 
     assert out == _Sentinel("build_result")
     assert called["init"] == 1
-    assert called["storage"] == {"milvus_collection_name": "c0", "milvus_upsert_strategy": "s0"}
+    assert called["storage"] == {
+        "milvus_collection_name": "c0",
+        "milvus_graph_index_collection_name": None,
+        "milvus_upsert_strategy": "s0",
+    }
     assert called["build_kwargs"] == {
         "text": "t",
         "doc_time": "2026-01-01T00:00:00+00:00",
@@ -98,7 +109,11 @@ def test_grag_build_kg_allows_overriding_collection_and_strategy(monkeypatch: py
         milvus_upsert_strategy="s1",
     )
 
-    assert called["storage"] == {"milvus_collection_name": "c1", "milvus_upsert_strategy": "s1"}
+    assert called["storage"] == {
+        "milvus_collection_name": "c1",
+        "milvus_graph_index_collection_name": None,
+        "milvus_upsert_strategy": "s1",
+    }
 
 
 def test_grag_query_wires_retrieval_manager_and_search(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -107,6 +122,7 @@ def test_grag_query_wires_retrieval_manager_and_search(monkeypatch: pytest.Monke
     called = {
         "init": 0,
         "rm_collection": None,
+        "rm_graph_index_collection": None,
         "search_kwargs": None,
     }
 
@@ -114,8 +130,9 @@ def test_grag_query_wires_retrieval_manager_and_search(monkeypatch: pytest.Monke
         called["init"] += 1
 
     class FakeRM:
-        def __init__(self, *, milvus_collection_name=None):
+        def __init__(self, *, milvus_collection_name=None, milvus_graph_index_collection_name=None):
             called["rm_collection"] = milvus_collection_name
+            called["rm_graph_index_collection"] = milvus_graph_index_collection_name
 
         def search(self, **kwargs):
             called["search_kwargs"] = dict(kwargs)
@@ -143,6 +160,7 @@ def test_grag_query_wires_retrieval_manager_and_search(monkeypatch: pytest.Monke
     assert out == _Sentinel("retrieval_result")
     assert called["init"] == 1
     assert called["rm_collection"] == "cQ"
+    assert called["rm_graph_index_collection"] is None
     assert called["search_kwargs"] == {
         "group_id": "g",
         "query": "q",
@@ -167,7 +185,7 @@ def test_grag_default_query_collection_follows_build_options(monkeypatch: pytest
     monkeypatch.setattr(ep, "initialize_config", lambda: None)
 
     class FakeRM:
-        def __init__(self, *, milvus_collection_name=None):
+        def __init__(self, *, milvus_collection_name=None, milvus_graph_index_collection_name=None):
             called["rm_collection"] = milvus_collection_name
 
         def search(self, **kwargs):
@@ -283,6 +301,19 @@ def test_grag_entrypoint_real_build_and_query(real_doc_texts, pytestconfig) -> N
             )
         assert len(semantic_res.semantic_hits) > 0
 
+        # 3.5) native（高级别名 -> vector/semantic）
+        print("\n[Native] query=", repr(semantic_q))
+        native_res = api.query(
+            group_id=group_id,
+            query=semantic_q,
+            modes=("native",),
+            top_k=10,
+            rerank_enabled=False,
+            milvus_collection_name=collection_name,
+        )
+        print("[Native] hits=", len(native_res.semantic_hits))
+        assert len(native_res.semantic_hits) > 0
+
         # 4) graph（如果抽取不到实体则跳过）
         entity_name = _pick_graph_entity_name(group_id=group_id, doc_id=first_doc_id)
         if not entity_name:
@@ -305,6 +336,37 @@ def test_grag_entrypoint_real_build_and_query(real_doc_texts, pytestconfig) -> N
             print(
                 f"  - {i}: name={repr(n.get('name'))} type={repr(n.get('type'))} desc={repr((n.get('description') or '')[:120])}"
             )
+
+        # 5) local / global（高级模式：自动组合 keyword + vector + local/global）
+        highlow = f"{entity_name}>{entity_name}"
+
+        print("\n[Local] highlow=", repr(highlow))
+        local_res = api.query(
+            group_id=group_id,
+            query=semantic_q,
+            modes=("local",),
+            graph_entity_name=highlow,
+            graph_max_depth=2,
+            graph_limit=50,
+            rerank_enabled=False,
+            milvus_collection_name=collection_name,
+        )
+        assert local_res.local_graph is not None
+        print("[Local] nodes=", len(local_res.local_graph.nodes), "edges=", len(local_res.local_graph.edges))
+
+        print("\n[Global] highlow=", repr(highlow))
+        global_res = api.query(
+            group_id=group_id,
+            query=semantic_q,
+            modes=("global",),
+            graph_entity_name=highlow,
+            graph_max_depth=2,
+            graph_limit=50,
+            rerank_enabled=False,
+            milvus_collection_name=collection_name,
+        )
+        assert global_res.global_graph is not None
+        print("[Global] nodes=", len(global_res.global_graph.nodes), "edges=", len(global_res.global_graph.edges))
 
     finally:
         if pause_s > 0:

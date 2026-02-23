@@ -56,6 +56,7 @@ class TestNeo4jGraphRepositoryRealDB:
             )
             entities = [
                 GraphEntityRecord(
+                    entity_id=f"{group_id}:{doc_id}:e0",
                     group_id=group_id,
                     doc_id=doc_id,
                     canonical_name="张三",
@@ -64,6 +65,7 @@ class TestNeo4jGraphRepositoryRealDB:
                     description="desc",
                 ),
                 GraphEntityRecord(
+                    entity_id=f"{group_id}:{doc_id}:e1",
                     group_id=group_id,
                     doc_id=doc_id,
                     canonical_name="李四",
@@ -74,6 +76,7 @@ class TestNeo4jGraphRepositoryRealDB:
             ]
             relations = [
                 GraphRelationRecord(
+                    relation_id=f"{group_id}:{doc_id}:r0",
                     group_id=group_id,
                     doc_id=doc_id,
                     subject="张三",

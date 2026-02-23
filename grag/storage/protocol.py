@@ -7,6 +7,7 @@ from .types import (
     ChunkRecord,
     DocumentRecord,
     GraphEntityRecord,
+    GraphIndexRecord,
     GraphRelationRecord,
 )
 
@@ -32,5 +33,6 @@ class GraphStorage(Protocol):
         embeddings: Sequence[ChunkEmbeddingRecord],
         entities: Sequence[GraphEntityRecord],
         relations: Sequence[GraphRelationRecord],
+        graph_index_records: Sequence[GraphIndexRecord],
     ) -> None:
         ...

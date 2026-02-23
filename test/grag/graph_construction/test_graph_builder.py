@@ -23,6 +23,10 @@ def _cleanup_postgres(*, group_id: str, doc_ids: list[str]) -> None:
             with conn.cursor() as cur:
                 for doc_id in doc_ids:
                     cur.execute(
+                        "DELETE FROM grag_relations WHERE group_id=%s AND doc_id=%s",
+                        (group_id, doc_id),
+                    )
+                    cur.execute(
                         "DELETE FROM grag_entities WHERE group_id=%s AND doc_id=%s",
                         (group_id, doc_id),
                     )
@@ -47,6 +51,24 @@ def _cleanup_milvus(*, collection_name: str, group_id: str, chunk_ids: list[str]
     pks = [f"{group_id}:{cid}" for cid in chunk_ids]
     expr = 'pk in ["' + '", "'.join(pks) + '"]'
     col.delete(expr)
+    col.flush()
+
+
+def _cleanup_milvus_graph_index(*, collection_name: str, group_id: str, doc_ids: list[str]) -> None:
+    """清理 graph_index collection 中本次写入的 entity/relation 向量记录。"""
+    dm = get_data_manager()
+    milvus = dm.get_milvus_client()
+    milvus.connect()
+    pymilvus = __import__("pymilvus")
+    if not pymilvus.utility.has_collection(collection_name, using=milvus._alias):
+        return
+    col = pymilvus.Collection(name=collection_name, using=milvus._alias)
+    for doc_id in doc_ids:
+        expr = f'group_id == "{group_id}" and doc_id == "{doc_id}"'
+        try:
+            col.delete(expr)
+        except Exception:
+            pass
     col.flush()
 
 
@@ -200,6 +222,10 @@ def test_graph_builder_build_and_save_with_real_db(real_doc_texts, pytestconfig)
         # 清理：新写入的三库数据
         if created_chunk_ids:
             _cleanup_milvus(collection_name=collection_name, group_id=group_id, chunk_ids=created_chunk_ids)
+
+        # graph_index 默认 collection 名为 grag_graph_index（见 DataClientGraphStorage 默认值）。
+        _cleanup_milvus_graph_index(collection_name="grag_graph_index", group_id=group_id, doc_ids=created_doc_ids)
+
         for doc_id in created_doc_ids:
             _cleanup_neo4j(group_id=group_id, doc_id=doc_id)
         if created_doc_ids:

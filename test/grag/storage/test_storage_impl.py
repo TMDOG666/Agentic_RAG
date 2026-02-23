@@ -6,6 +6,7 @@ from grag.storage.types import (
     ChunkRecord,
     DocumentRecord,
     GraphEntityRecord,
+    GraphIndexRecord,
     GraphRelationRecord,
 )
 
@@ -21,6 +22,10 @@ def _cleanup_real_storage(*, group_id: str, doc_id: str, chunk_ids: list[str]) -
     try:
         with conn:
             with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM grag_relations WHERE group_id=%s AND doc_id=%s",
+                    (group_id, doc_id),
+                )
                 cur.execute(
                     "DELETE FROM grag_entities WHERE group_id=%s AND doc_id=%s",
                     (group_id, doc_id),
@@ -108,6 +113,7 @@ class TestDataClientGraphStorageRealDB:
         ]
         entities = [
             GraphEntityRecord(
+                entity_id=f"{group_id}:{doc_id}:e0",
                 group_id=group_id,
                 doc_id=doc_id,
                 canonical_name="张三",
@@ -118,6 +124,7 @@ class TestDataClientGraphStorageRealDB:
         ]
         relations = [
             GraphRelationRecord(
+                relation_id=f"{group_id}:{doc_id}:r0",
                 group_id=group_id,
                 doc_id=doc_id,
                 subject="张三",
@@ -128,6 +135,8 @@ class TestDataClientGraphStorageRealDB:
             )
         ]
 
+        graph_index_records: list[GraphIndexRecord] = []
+
         try:
             storage.save_document(
                 document=document,
@@ -135,6 +144,7 @@ class TestDataClientGraphStorageRealDB:
                 embeddings=embeddings,
                 entities=entities,
                 relations=relations,
+                graph_index_records=graph_index_records,
             )
         finally:
             _cleanup_real_storage(group_id=group_id, doc_id=doc_id, chunk_ids=chunk_ids)

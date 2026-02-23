@@ -47,6 +47,10 @@ def _cleanup_postgres(*, group_id: str, doc_ids: list[str]) -> None:
             with conn.cursor() as cur:
                 for doc_id in doc_ids:
                     cur.execute(
+                        "DELETE FROM grag_relations WHERE group_id=%s AND doc_id=%s",
+                        (group_id, doc_id),
+                    )
+                    cur.execute(
                         "DELETE FROM grag_entities WHERE group_id=%s AND doc_id=%s",
                         (group_id, doc_id),
                     )
@@ -71,6 +75,23 @@ def _cleanup_milvus(*, collection_name: str, group_id: str, chunk_ids: list[str]
     pks = [f"{group_id}:{cid}" for cid in chunk_ids]
     expr = 'pk in ["' + '", "'.join(pks) + '"]'
     col.delete(expr)
+    col.flush()
+
+
+def _cleanup_milvus_graph_index(*, collection_name: str, group_id: str, doc_ids: list[str]) -> None:
+    dm = get_data_manager()
+    milvus = dm.get_milvus_client()
+    milvus.connect()
+    pymilvus = __import__("pymilvus")
+    if not pymilvus.utility.has_collection(collection_name, using=milvus._alias):
+        return
+    col = pymilvus.Collection(name=collection_name, using=milvus._alias)
+    for doc_id in doc_ids:
+        expr = f'group_id == "{group_id}" and doc_id == "{doc_id}"'
+        try:
+            col.delete(expr)
+        except Exception:
+            pass
     col.flush()
 
 
@@ -236,6 +257,7 @@ def test_real_docs_end_to_end_ingestion_with_real_llm_embedding(request) -> None
                 group_id=group_id,
                 chunk_ids=all_chunk_ids,
             )
+        _cleanup_milvus_graph_index(collection_name="grag_graph_index", group_id=group_id, doc_ids=doc_ids)
         _drop_milvus_collection(collection_name=milvus_collection_name)
         for doc_id in doc_ids:
             _cleanup_neo4j(group_id=group_id, doc_id=doc_id)

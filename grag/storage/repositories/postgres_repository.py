@@ -4,7 +4,7 @@ from typing import Optional, Sequence
 
 from grag.data_client.postgres_client import PostgresClient
 
-from ..types import ChunkRecord, DocumentRecord, GraphEntityRecord
+from ..types import ChunkRecord, DocumentRecord, GraphEntityRecord, GraphRelationRecord
 
 
 """grag.storage.repositories.postgres_repository
@@ -75,11 +75,30 @@ class PostgresGraphRepository:
             CREATE TABLE IF NOT EXISTS grag_entities (
                 group_id TEXT NOT NULL,
                 doc_id TEXT NOT NULL,
+                entity_id TEXT NOT NULL,
                 canonical_name TEXT NOT NULL,
                 type TEXT NOT NULL,
                 aliases_json TEXT NOT NULL,
                 description TEXT NOT NULL,
                 PRIMARY KEY (group_id, doc_id, canonical_name)
+            );
+            """,
+
+            # 关系表：用于审计/回溯，以及为 relation_id 提供“权威来源”。
+            # 说明：
+            # - 当前项目的关系仍然以 Neo4j 为主用于图查询。
+            # - 但为了后续 global 检索（relation embedding -> head/tail），我们也需要在关系型库保存一份。
+            """
+            CREATE TABLE IF NOT EXISTS grag_relations (
+                group_id TEXT NOT NULL,
+                doc_id TEXT NOT NULL,
+                relation_id TEXT NOT NULL,
+                subject TEXT NOT NULL,
+                object TEXT NOT NULL,
+                relation_type TEXT NOT NULL,
+                description TEXT NOT NULL,
+                confidence INTEGER,
+                PRIMARY KEY (group_id, relation_id)
             );
             """,
         ]
@@ -90,6 +109,40 @@ class PostgresGraphRepository:
                 with conn.cursor() as cur:
                     for sql in ddl:
                         cur.execute(sql)
+
+                    # 兼容旧环境：历史版本可能已创建 grag_entities，但缺少 entity_id 列。
+                    #
+                    # 注意：
+                    # - 不能依赖 "ADD COLUMN IF NOT EXISTS"（可能受 Postgres 版本/权限/语法限制）。
+                    # - 因此这里先查 information_schema，缺列则执行分步迁移：
+                    #   1) ADD COLUMN（先允许 NULL）
+                    #   2) SET DEFAULT
+                    #   3) 将历史行补齐为 ''
+                    #   4) SET NOT NULL
+                    cur.execute(
+                        """
+                        SELECT 1
+                        FROM information_schema.columns
+                        WHERE table_name = 'grag_entities'
+                          AND column_name = 'entity_id'
+                        LIMIT 1;
+                        """
+                    )
+                    has_entity_id = cur.fetchone() is not None
+                    if not has_entity_id:
+                        cur.execute("ALTER TABLE grag_entities ADD COLUMN entity_id TEXT")
+                        cur.execute("ALTER TABLE grag_entities ALTER COLUMN entity_id SET DEFAULT ''")
+                        cur.execute("UPDATE grag_entities SET entity_id = '' WHERE entity_id IS NULL")
+                        cur.execute("ALTER TABLE grag_entities ALTER COLUMN entity_id SET NOT NULL")
+
+                    # entity_id 理论上在 (group_id, doc_id, canonical_name) 决定性生成，因此可建立唯一索引。
+                    # best-effort：索引已存在时会报错，因此用 try/catch。
+                    try:
+                        cur.execute(
+                            "CREATE UNIQUE INDEX IF NOT EXISTS grag_entities_entity_id_uq ON grag_entities (group_id, entity_id)"
+                        )
+                    except Exception:
+                        pass
         finally:
             conn.close()
 
@@ -240,7 +293,7 @@ class PostgresGraphRepository:
                 with conn.cursor() as cur:
                     cur.execute(
                         """
-                        SELECT doc_id, canonical_name, type, aliases_json, description
+                        SELECT doc_id, entity_id, canonical_name, type, aliases_json, description
                         FROM grag_entities
                         WHERE group_id = %s
                         ORDER BY doc_id DESC
@@ -251,7 +304,7 @@ class PostgresGraphRepository:
                     rows = cur.fetchall()
 
             out: list[GraphEntityRecord] = []
-            for doc_id, canonical_name, etype, aliases_json, description in rows:
+            for doc_id, entity_id, canonical_name, etype, aliases_json, description in rows:
                 aliases: list[str] = []
                 try:
                     raw = json.loads(aliases_json or "[]")
@@ -262,6 +315,7 @@ class PostgresGraphRepository:
 
                 out.append(
                     GraphEntityRecord(
+                        entity_id=str(entity_id),
                         group_id=str(group_id),
                         doc_id=str(doc_id),
                         canonical_name=str(canonical_name),
@@ -280,6 +334,7 @@ class PostgresGraphRepository:
         document: DocumentRecord,
         chunks: Sequence[ChunkRecord],
         entities: Sequence[GraphEntityRecord],
+        relations: Sequence[GraphRelationRecord],
     ) -> None:
         """将文档、chunk、实体落入 PostgreSQL。
 
@@ -346,11 +401,12 @@ class PostgresGraphRepository:
                         cur.execute(
                             """
                             INSERT INTO grag_entities (
-                                group_id, doc_id, canonical_name, type, aliases_json, description
+                                group_id, doc_id, entity_id, canonical_name, type, aliases_json, description
                             )
-                            VALUES (%s, %s, %s, %s, %s, %s)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s)
                             ON CONFLICT (group_id, doc_id, canonical_name)
                             DO UPDATE SET
+                                entity_id = EXCLUDED.entity_id,
                                 type = EXCLUDED.type,
                                 aliases_json = EXCLUDED.aliases_json,
                                 description = EXCLUDED.description;
@@ -358,10 +414,39 @@ class PostgresGraphRepository:
                             (
                                 e.group_id,
                                 e.doc_id,
+                                e.entity_id,
                                 e.canonical_name,
                                 e.type,
                                 json.dumps(list(e.aliases), ensure_ascii=False),
                                 e.description,
+                            ),
+                        )
+
+                    for r in relations:
+                        cur.execute(
+                            """
+                            INSERT INTO grag_relations (
+                                group_id, doc_id, relation_id, subject, object, relation_type, description, confidence
+                            )
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (group_id, relation_id)
+                            DO UPDATE SET
+                                doc_id = EXCLUDED.doc_id,
+                                subject = EXCLUDED.subject,
+                                object = EXCLUDED.object,
+                                relation_type = EXCLUDED.relation_type,
+                                description = EXCLUDED.description,
+                                confidence = EXCLUDED.confidence;
+                            """,
+                            (
+                                r.group_id,
+                                r.doc_id,
+                                r.relation_id,
+                                r.subject,
+                                r.object,
+                                r.relation_type,
+                                r.description,
+                                r.confidence,
                             ),
                         )
         finally:

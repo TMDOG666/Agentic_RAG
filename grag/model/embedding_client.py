@@ -227,7 +227,28 @@ class EmbeddingClient:
         """
         try:
             embeddings = self.get_embeddings()
-            return embeddings.embed_documents(texts)
+            if not texts:
+                return []
+
+            provider_config = self._settings.get_provider_config(
+                ProviderType.EMBEDDING,
+                self.provider_name,
+            )
+
+            # 部分 embedding 网关对单次 input 数量有硬限制（例如 64）。
+            # 这里统一做分批，避免 413 / batch size exceeded。
+            max_bs = getattr(provider_config, "max_batch_size", None)
+            try:
+                max_bs_int = int(max_bs) if max_bs is not None else 0
+            except Exception:
+                max_bs_int = 0
+            batch_size = max_bs_int if max_bs_int and max_bs_int > 0 else 64
+
+            out: List[List[float]] = []
+            for i in range(0, len(texts), batch_size):
+                batch = texts[i : i + batch_size]
+                out.extend(embeddings.embed_documents(batch))
+            return out
         except Exception as e:
             raise RuntimeError(f"文本嵌入失败: {e}") from e
 

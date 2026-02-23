@@ -30,7 +30,7 @@ class _Hit:
 
 class TestRerankChunkHits:
     def test_rerank_disabled_when_query_empty(self):
-        from grag.retrieval.reranker import rerank_chunk_hits
+        from grag.retrieval.utils.reranker import rerank_chunk_hits
 
         hits = [_Hit(text="a", id="1"), _Hit(text="b", id="2")]
         ordered, info = rerank_chunk_hits(query="", hits=hits, top_k=10)
@@ -39,7 +39,7 @@ class TestRerankChunkHits:
         assert info.enabled is False
 
     def test_rerank_fallback_when_reranker_not_available(self, monkeypatch: pytest.MonkeyPatch):
-        import grag.retrieval.reranker as reranker_mod
+        import grag.retrieval.utils.reranker as reranker_mod
 
         class FakeClient:
             def __init__(self, provider_name: Optional[str] = None):
@@ -57,7 +57,7 @@ class TestRerankChunkHits:
         assert info.enabled is False
 
     def test_rerank_reorders_and_maps_back_to_hits(self, monkeypatch: pytest.MonkeyPatch):
-        import grag.retrieval.reranker as reranker_mod
+        import grag.retrieval.utils.reranker as reranker_mod
 
         class FakeClient:
             def __init__(self, provider_name: Optional[str] = None):

@@ -135,10 +135,11 @@ class Neo4jGraphRepository:
             for e in entities:
                 tx.run(
                     "MERGE (n:Entity {group_id: $group_id, doc_id: $doc_id, name: $name}) "
-                    "SET n.type=$type, n.description=$description, n.aliases=$aliases",
+                    "SET n.entity_id=$entity_id, n.type=$type, n.description=$description, n.aliases=$aliases",
                     group_id=e.group_id,
                     doc_id=e.doc_id,
                     name=e.canonical_name,
+                    entity_id=e.entity_id,
                     type=e.type,
                     description=e.description,
                     aliases=list(e.aliases),
@@ -148,12 +149,13 @@ class Neo4jGraphRepository:
                 tx.run(
                     "MATCH (s:Entity {group_id: $group_id, doc_id: $doc_id, name: $s}) "
                     "MATCH (o:Entity {group_id: $group_id, doc_id: $doc_id, name: $o}) "
-                    "MERGE (s)-[rel:REL {group_id: $group_id, doc_id: $doc_id, type: $t, description: $d}]->(o) "
-                    "SET rel.confidence = $c",
+                    "MERGE (s)-[rel:REL {group_id: $group_id, doc_id: $doc_id, relation_id: $rid}]->(o) "
+                    "SET rel.type=$t, rel.description=$d, rel.confidence=$c",
                     group_id=r.group_id,
                     doc_id=r.doc_id,
                     s=r.subject,
                     o=r.object,
+                    rid=r.relation_id,
                     t=r.relation_type,
                     d=r.description,
                     c=r.confidence,

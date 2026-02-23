@@ -22,6 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 import json
+from uuid import UUID, uuid5
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from ..model.embedding_client import EmbeddingClient
@@ -31,6 +32,7 @@ from ..storage import (
     ChunkRecord,
     DocumentRecord,
     GraphEntityRecord,
+    GraphIndexRecord,
     GraphRelationRecord,
     GraphStorage,
 )
@@ -177,6 +179,9 @@ class GraphBuilder:
             # 融合结果来自 entity_resolution_knowledge_fusion.IntraDocumentFusionResult
             entities = [
                 GraphEntityRecord(
+                    # entity_id/relation_id 必须是“融合/重写后的最终结果”才能保持幂等。
+                    # 因此这里先占位，稍后统一用 uuid5 生成。
+                    entity_id="",
                     group_id=group_id,
                     doc_id=str(final_doc_id),
                     canonical_name=fe.canonical_name,
@@ -189,6 +194,7 @@ class GraphBuilder:
 
             relations = [
                 GraphRelationRecord(
+                    relation_id="",
                     group_id=group_id,
                     doc_id=str(final_doc_id),
                     subject=r.subject,
@@ -225,6 +231,109 @@ class GraphBuilder:
                 old_entities=old_entities,
             )
 
+        # 3.8) 为实体/关系生成“稳定 id”（uuid5）。
+        #
+        # 说明：
+        # - 你要求以 Postgres 的 entity_id/relation_id 作为权威 id。为了让入库幂等且可复现，
+        #   我们在写入前统一按确定性规则生成（uuid5）。
+        # - 由于 cross-document fusion 可能会改写 canonical_name / subject/object，因此必须在
+        #   fusion 完成之后再生成 id。
+        GRAG_NAMESPACE = UUID("6b45223b-b3b8-4a2f-b7b7-3d6ad9d2f3f0")
+
+        def _entity_id(e: GraphEntityRecord) -> str:
+            return str(uuid5(GRAG_NAMESPACE, f"{e.group_id}:{e.doc_id}:{e.canonical_name}"))
+
+        def _relation_id(r: GraphRelationRecord) -> str:
+            return str(uuid5(GRAG_NAMESPACE, f"{r.group_id}:{r.doc_id}:{r.subject}:{r.relation_type}:{r.object}"))
+
+        entities = [
+            GraphEntityRecord(
+                entity_id=_entity_id(e),
+                group_id=e.group_id,
+                doc_id=e.doc_id,
+                canonical_name=e.canonical_name,
+                type=e.type,
+                aliases=list(e.aliases),
+                description=e.description,
+            )
+            for e in entities
+        ]
+
+        relations = [
+            GraphRelationRecord(
+                relation_id=_relation_id(r),
+                group_id=r.group_id,
+                doc_id=r.doc_id,
+                subject=r.subject,
+                object=r.object,
+                relation_type=r.relation_type,
+                description=r.description,
+                confidence=r.confidence,
+            )
+            for r in relations
+        ]
+
+        # 3.9) 生成 graph_index_records（entity/relation 向量索引）
+        #
+        # 你确认的模板：
+        # - entity: "{canonical_name}\n{aliases}\n{description}"
+        # - relation: "{head} -[{type}]-> {tail}\n{description}"
+        #
+        # 注意：
+        # - 这里的 embedding 与 chunk embedding 使用同一个 EmbeddingClient/provider。
+        # - 入库策略为“尽快失败”：embedding 失败则整次 build_and_save 失败（与现有 chunk embedding 一致）。
+        graph_index_records: List[GraphIndexRecord] = []
+        graph_index_texts: List[str] = []
+        graph_index_meta: List[tuple[str, object]] = []
+
+        for e in entities:
+            aliases = " ".join([a for a in e.aliases if str(a).strip()])
+            text_for_embedding = f"{e.canonical_name}\n{aliases}\n{e.description}".strip()
+            graph_index_texts.append(text_for_embedding)
+            graph_index_meta.append(("entity", e))
+
+        for r in relations:
+            text_for_embedding = f"{r.subject} -[{r.relation_type}]-> {r.object}\n{r.description}".strip()
+            graph_index_texts.append(text_for_embedding)
+            graph_index_meta.append(("relation", r))
+
+        if graph_index_texts:
+            gi_vectors = self._embedding_client.embed_texts(graph_index_texts)
+            for (kind, obj), vec, raw_text in zip(graph_index_meta, gi_vectors, graph_index_texts):
+                if kind == "entity":
+                    e = obj  # type: ignore[assignment]
+                    e_id = getattr(e, "entity_id")
+                    graph_index_records.append(
+                        GraphIndexRecord(
+                            pk=f"e:{e.group_id}:{e.doc_id}:{e_id}",
+                            kind="entity",
+                            group_id=e.group_id,
+                            doc_id=e.doc_id,
+                            source_id=e_id,
+                            name=e.canonical_name,
+                            text=raw_text,
+                            embedding=list(vec),
+                        )
+                    )
+                else:
+                    r = obj  # type: ignore[assignment]
+                    r_id = getattr(r, "relation_id")
+                    graph_index_records.append(
+                        GraphIndexRecord(
+                            pk=f"r:{r.group_id}:{r.doc_id}:{r_id}",
+                            kind="relation",
+                            group_id=r.group_id,
+                            doc_id=r.doc_id,
+                            source_id=r_id,
+                            name=r.relation_type,
+                            text=raw_text,
+                            embedding=list(vec),
+                            head_name=r.subject,
+                            tail_name=r.object,
+                            relation_type=r.relation_type,
+                        )
+                    )
+
         # 4) 入库
         self._storage.save_document(
             document=document,
@@ -232,6 +341,7 @@ class GraphBuilder:
             embeddings=embeddings,
             entities=entities,
             relations=relations,
+            graph_index_records=graph_index_records,
         )
 
         return GraphBuildResult(
@@ -376,6 +486,9 @@ class GraphBuilder:
             return (
                 True,
                 GraphEntityRecord(
+                    # 注意：entity_id 在 build_and_save 的 3.8 阶段统一生成。
+                    # 这里先占位，避免 dataclass 缺参，同时保持 fusion 阶段只关注语义字段。
+                    entity_id="",
                     group_id=group_id,
                     doc_id=incoming.doc_id,
                     canonical_name=canonical_name,
@@ -423,6 +536,8 @@ class GraphBuilder:
             if len((incoming.description or "")) > len((desc or "")):
                 desc = incoming.description
             return GraphEntityRecord(
+                # 注意：entity_id 在 build_and_save 的 3.8 阶段统一生成。
+                entity_id="",
                 group_id=group_id,
                 doc_id=incoming.doc_id,
                 canonical_name=base.canonical_name,
@@ -584,6 +699,9 @@ class GraphBuilder:
         for r in relations:
             rewritten_relations.append(
                 GraphRelationRecord(
+                    # 注意：relation_id 在 build_and_save 的 3.8 阶段统一生成。
+                    # 这里先占位，避免 dataclass 缺参，同时保持 fusion 阶段只关注语义字段。
+                    relation_id="",
                     group_id=r.group_id,
                     doc_id=r.doc_id,
                     subject=_rewrite_name(r.subject),
