@@ -1,0 +1,16 @@
+{
+  "source": "chinese_outline",
+  "chunk_count": 2,
+  "chunks": [
+    {
+      "chunk_id": 0,
+      "text": "第一章 概述\n这里是第一章内容。",
+      "token_count": 3
+    },
+    {
+      "chunk_id": 1,
+      "text": "第二章 细节\n这里是第二章内容。",
+      "token_count": 3
+    }
+  ]
+}

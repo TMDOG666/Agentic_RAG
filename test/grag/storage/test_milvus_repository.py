@@ -1,7 +1,7 @@
 from grag.storage.repositories.milvus_repository import MilvusVectorRepository
 from grag.storage.types import ChunkEmbeddingRecord, DocumentRecord
 
-from grag.config import initialize_config
+from grag.config import get_config_manager
 from grag.data_client import get_data_manager
 
 
@@ -21,7 +21,7 @@ def _cleanup_milvus(*, group_id: str, chunk_ids: list[str]) -> None:
 
 class TestMilvusVectorRepositoryRealDB:
     def test_real_connection_and_upsert_and_cleanup(self) -> None:
-        initialize_config()
+        get_config_manager().initialize()
         dm = get_data_manager()
 
         assert dm.get_milvus_client().test_connection() is True

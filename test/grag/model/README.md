@@ -44,4 +44,4 @@ python run_all_tests.py
 
 ## 与 Config 的联动
 
-所有测试在 `setup_method` 或 `run_tests()` 前会调用 `grag.config.initialize_config()`，确保从 `config/grag_config.yaml` 加载配置后再创建 LLM/Embedding/Reranker 客户端与 ModelManager，从而验证「配置层 + model 层」的联动。
+所有测试在 `setup_method` 或 `run_tests()` 前会调用 `get_config_manager().initialize()`，确保从 `config/grag_config.yaml` 加载配置后再创建 LLM/Embedding/Reranker 客户端与 ModelManager，从而验证「配置层 + model 层」的联动。

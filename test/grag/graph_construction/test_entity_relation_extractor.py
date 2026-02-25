@@ -8,7 +8,7 @@ from grag.graph_construction.entity_relation_extractor import (
     Chunk,
     EntityRelationExtractor,
 )
-from grag.config import ProviderType, get_grag_settings
+from grag.config import ProviderType, get_config_manager
 import pytest
 
 
@@ -34,7 +34,7 @@ def _is_local_url(url: str | None) -> bool:
 
 
 def _ensure_real_llm_ready() -> None:
-    settings = get_grag_settings()
+    settings = get_config_manager().get_settings()
     llm_cfg = settings.get_provider_config(ProviderType.LLM)
     llm_api_key = (
         __import__("os").environ.get("GRAG_LLM_API_KEY")

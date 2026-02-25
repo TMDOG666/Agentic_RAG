@@ -1,11 +1,11 @@
 """测试 Neo4j 客户端 (Neo4jClient)"""
 
-from grag.config import initialize_config
+from grag.config import get_config_manager
 from grag.data_client.neo4j_client import Neo4jClient, get_neo4j_client
 
 
 def _ensure_config():
-    initialize_config()
+    get_config_manager().initialize()
 
 
 class TestNeo4jClient:

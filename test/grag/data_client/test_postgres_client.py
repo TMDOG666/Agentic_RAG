@@ -1,11 +1,11 @@
 """测试 PostgreSQL 客户端 (PostgresClient)"""
 
-from grag.config import initialize_config
+from grag.config import get_config_manager
 from grag.data_client.postgres_client import PostgresClient, get_postgres_client
 
 
 def _ensure_config():
-    initialize_config()
+    get_config_manager().initialize()
 
 
 class TestPostgresClient:

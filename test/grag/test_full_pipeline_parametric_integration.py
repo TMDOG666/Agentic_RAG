@@ -10,7 +10,7 @@ from uuid import uuid4
 
 import pytest
 
-from grag.config import initialize_config
+from grag.config import get_config_manager
 from grag.data_client import get_data_manager
 from grag.graph_construction.graph_builder import GraphBuilder
 from grag.retrieval import RetrievalManager
@@ -110,7 +110,7 @@ def test_full_pipeline_parametric(real_doc_texts, pytestconfig) -> None:
       （目前为了不引入更多参数，我们建议在本测试中总是使用 --pipeline-ingest。）
     """
 
-    initialize_config()
+    get_config_manager().initialize()
     dm = get_data_manager()
 
     assert dm.get_postgres_client().test_connection() is True

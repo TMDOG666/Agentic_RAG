@@ -88,12 +88,11 @@ class TestRerankChunkHits:
 
 class TestRetrievalManagerRerank:
     def test_retrieval_manager_reranks_keyword_hits(self, monkeypatch: pytest.MonkeyPatch):
-        from grag.retrieval import RetrievalManager, RetrievalResult
-        from grag.retrieval.keyword_retriever import KeywordChunkHit
+        from grag.retrieval import BaseRetrievalManager, RetrievalResult, KeywordChunkHit
         import grag.retrieval.base_retriever.base_retrieval_manager as rm_mod
 
-        # 1) 构造一个不触发真实 DB 的 RetrievalManager 实例
-        rm = RetrievalManager.__new__(RetrievalManager)
+        # 1) 构造一个不触发真实 DB 的 BaseRetrievalManager 实例
+        rm = BaseRetrievalManager.__new__(BaseRetrievalManager)
 
         class FakeKeyword:
             def search(self, **kwargs):
@@ -133,9 +132,9 @@ class TestRetrievalManagerRerank:
         assert [h.chunk_id for h in res.keyword_hits] == ["2", "1"]
 
     def test_group_id_required(self):
-        from grag.retrieval import RetrievalManager
+        from grag.retrieval import BaseRetrievalManager
 
-        rm = RetrievalManager.__new__(RetrievalManager)
+        rm = BaseRetrievalManager.__new__(BaseRetrievalManager)
         rm._keyword = object()
         rm._semantic = object()
         rm._graph = object()
@@ -144,11 +143,10 @@ class TestRetrievalManagerRerank:
             rm.search(group_id="", query="q", modes=["keyword"])  # type: ignore[arg-type]
 
     def test_retrieval_manager_reranks_graph_nodes(self, monkeypatch: pytest.MonkeyPatch):
-        from grag.retrieval import RetrievalManager, RetrievalResult
-        from grag.retrieval.graph_retriever import GraphSubgraphResult
+        from grag.retrieval import BaseRetrievalManager, RetrievalResult, GraphSubgraphResult
         import grag.retrieval.base_retriever.base_retrieval_manager as rm_mod
 
-        rm = RetrievalManager.__new__(RetrievalManager)
+        rm = BaseRetrievalManager.__new__(BaseRetrievalManager)
 
         class FakeKeyword:
             def search(self, **kwargs):

@@ -1,6 +1,6 @@
 """测试模型管理器 (ModelManager)"""
 
-from grag.config import initialize_config
+from grag.config import get_config_manager
 from grag.model.model_manager import (
     ModelManager,
     get_model_manager,
@@ -18,7 +18,7 @@ from grag.model.reranker_client import RerankerClient
 
 def _ensure_config():
     """确保配置已初始化"""
-    initialize_config()
+    get_config_manager().initialize()
 
 
 class TestModelManager:

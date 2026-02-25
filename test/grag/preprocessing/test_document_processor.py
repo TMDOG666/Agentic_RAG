@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from grag.preprocessing import get_document_processor
-from grag.config import initialize_config, get_grag_settings, ProviderType
+from grag.config import get_config_manager, ProviderType
 
 
 def test_document_processor():
@@ -19,7 +19,8 @@ def test_document_processor():
     
     # 初始化配置
     print("\n=== 初始化配置 ===")
-    initialize_config()
+    cm = get_config_manager()
+    cm.initialize()
     print("✅ 配置初始化成功")
 
     # 创建文档处理器
@@ -38,7 +39,7 @@ def test_document_processor():
     try:
         print("\n=== 视觉模型配置 ===")
         vision_info = processor._get_vision_client().get_config_info()
-        settings = get_grag_settings()
+        settings = cm.get_settings()
         vision_cfg = settings.get_provider_config(ProviderType.VISION)
         assert vision_info["provider"] == settings.vision_provider
         assert vision_info["model"] == vision_cfg.model
@@ -50,7 +51,7 @@ def test_document_processor():
     print("\n=== LLM配置 ===")
     llm_client = processor._get_llm_client()
     llm_info = llm_client.get_provider_info()
-    settings = get_grag_settings()
+    settings = cm.get_settings()
     llm_cfg = settings.get_provider_config(ProviderType.LLM)
     assert llm_info["provider_name"] == settings.llm_provider
     assert llm_info["model"] == llm_cfg.model
@@ -60,7 +61,7 @@ def test_document_processor():
 def test_process_single_file(tmp_path: Path) -> None:
     """测试处理单个文件（使用 pytest tmp_path 自动创建输入文件）。"""
 
-    initialize_config()
+    get_config_manager().initialize()
     processor = get_document_processor()
 
     input_file = tmp_path / "input.txt"
@@ -74,7 +75,7 @@ def test_process_single_file(tmp_path: Path) -> None:
 def test_batch_process(tmp_path: Path) -> None:
     """测试 batch_process（使用 pytest tmp_path 自动准备输入目录）。"""
 
-    initialize_config()
+    get_config_manager().initialize()
     processor = get_document_processor()
 
     input_dir = tmp_path / "in"

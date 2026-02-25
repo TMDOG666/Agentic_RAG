@@ -16,7 +16,7 @@ PostgreSQL 关系数据库客户端
 import os
 from typing import Optional, Any, Dict
 
-from ..config import get_grag_settings, ProviderType
+from ..config import get_config_manager, ProviderType
 
 
 def _get_psycopg2():
@@ -44,7 +44,7 @@ class PostgresClient:
         """
         self.provider_name = provider_name
         self._conn: Any = None
-        self._settings = get_grag_settings()
+        self._settings = get_config_manager().get_settings()
 
     def _get_config(self):
         """获取当前提供商的 PostgreSQL 配置"""

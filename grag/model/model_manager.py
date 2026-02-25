@@ -28,7 +28,7 @@ from datetime import datetime
 from .llm_client import LLMClient, get_llm_model, test_llm_connection
 from .embedding_client import EmbeddingClient, get_embeddings, test_embedding_connection
 from .reranker_client import RerankerClient, rerank_documents, is_reranker_available, test_reranker_connection
-from ..config import get_grag_settings, ProviderType
+from ..config import get_config_manager, ProviderType
 
 
 @dataclass
@@ -51,7 +51,7 @@ class ModelManager:
 
     def __init__(self):
         """初始化模型管理器"""
-        self._settings = get_grag_settings()
+        self._settings = get_config_manager().get_settings()
 
         # 模型实例缓存
         self._llm_clients: Dict[str, LLMClient] = {}

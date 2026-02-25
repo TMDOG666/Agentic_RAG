@@ -54,6 +54,11 @@ class ConfigValidator:
         Returns:
             验证结果列表
         """
+        # 说明：这里的验证是“业务层/结构层”验证，目标是给出更可读的错误信息与修复建议。
+        # 它与 settings.py 中的 Pydantic 校验互补：
+        # - ConfigValidator：更偏向“字段是否缺失、引用是否存在、数值范围是否合理”等。
+        # - Pydantic Settings：更偏向“类型/必填/默认值/模型级约束”。
+        # 一般推荐：initialize_config(validate=True) 同时跑两者。
         results = []
 
         # 验证顶级结构
@@ -529,26 +534,6 @@ class ConfigValidator:
                 summary["info_messages"].append(f"{result.field_path}: {result.message}")
 
         return summary
-
-
-def validate_grag_config(config: Optional[Dict[str, Any]] = None) -> List[ValidationResult]:
-    """验证GraphRAG配置
-
-    Args:
-        config: 要验证的配置，如果为None则自动加载默认配置
-
-    Returns:
-        验证结果列表
-    """
-    from .config_loader import load_grag_config
-
-    if config is None:
-        config = load_grag_config()
-
-    validator = ConfigValidator()
-    return validator.validate_config(config)
-
-
 def print_validation_results(results: List[ValidationResult]) -> None:
     """打印验证结果"""
     if not results:

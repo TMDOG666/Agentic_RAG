@@ -30,7 +30,7 @@ from langchain_openai import OpenAIEmbeddings
 from langchain_core.embeddings import Embeddings
 from langchain_community.embeddings import HuggingFaceEmbeddings
 
-from ..config import get_grag_settings, get_settings, ProviderType
+from ..config import get_config_manager, ProviderType
 
 
 class EmbeddingClient:
@@ -47,10 +47,9 @@ class EmbeddingClient:
         """
         self.provider_name = provider_name
         self._embeddings: Optional[Embeddings] = None
-        try:
-            self._settings = get_grag_settings()
-        except Exception:
-            self._settings = get_settings()
+        # 统一通过 ConfigManager 全局入口获取 settings。
+        # ConfigManager 会在首次使用时自动 initialize。
+        self._settings = get_config_manager().get_settings()
 
     def get_embeddings(self) -> Embeddings:
         """获取或创建嵌入模型实例

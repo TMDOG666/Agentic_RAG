@@ -14,13 +14,11 @@ GraphRAG（Graph Retrieval-Augmented Generation）是一个基于知识图谱的
 - config: 配置层 - 系统配置管理
 
 使用示例：
-    from grag.config import initialize_config, get_grag_settings
+    from grag.config import get_config_manager
 
-    # 初始化配置
-    initialize_config()
-
-    # 获取设置
-    settings = get_grag_settings()
+    cm = get_config_manager()
+    cm.initialize()
+    settings = cm.get_settings()
 """
 
 __version__ = "0.1.0"

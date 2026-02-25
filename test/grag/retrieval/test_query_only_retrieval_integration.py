@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from grag.config import initialize_config
+from grag.config import get_config_manager
 from grag.data_client import get_data_manager
 from grag.retrieval import RetrievalManager
 
@@ -48,7 +48,7 @@ def test_query_only_retrieval(pytestconfig) -> None:
     - 运行本用例时通过 pytest options 传入 group_id、milvus collection 以及 query。
     """
 
-    initialize_config()
+    get_config_manager().initialize()
     dm = get_data_manager()
 
     assert dm.get_postgres_client().test_connection() is True

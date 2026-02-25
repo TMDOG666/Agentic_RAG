@@ -21,8 +21,10 @@ def test_grag_build_kg_wires_storage_and_builder(monkeypatch: pytest.MonkeyPatch
         "build_kwargs": None,
     }
 
-    def fake_init():
-        called["init"] += 1
+    class _FakeCM:
+        def initialize(self):
+            called["init"] += 1
+            return True
 
     class FakeStorage:
         def __init__(
@@ -46,7 +48,7 @@ def test_grag_build_kg_wires_storage_and_builder(monkeypatch: pytest.MonkeyPatch
             called["build_kwargs"] = dict(kwargs)
             return _Sentinel("build_result")
 
-    monkeypatch.setattr(ep, "initialize_config", fake_init)
+    monkeypatch.setattr(ep, "get_config_manager", lambda: _FakeCM())
     monkeypatch.setattr(ep, "DataClientGraphStorage", FakeStorage)
     monkeypatch.setattr(ep, "GraphBuilder", FakeBuilder)
 
@@ -80,12 +82,23 @@ def test_grag_build_kg_allows_overriding_collection_and_strategy(monkeypatch: py
 
     called = {"storage": None}
 
-    monkeypatch.setattr(ep, "initialize_config", lambda: None)
+    class _FakeCM:
+        def initialize(self):
+            return True
+
+    monkeypatch.setattr(ep, "get_config_manager", lambda: _FakeCM())
 
     class FakeStorage:
-        def __init__(self, *, milvus_collection_name=None, milvus_upsert_strategy=None):
+        def __init__(
+            self,
+            *,
+            milvus_collection_name=None,
+            milvus_graph_index_collection_name=None,
+            milvus_upsert_strategy=None,
+        ):
             called["storage"] = {
                 "milvus_collection_name": milvus_collection_name,
+                "milvus_graph_index_collection_name": milvus_graph_index_collection_name,
                 "milvus_upsert_strategy": milvus_upsert_strategy,
             }
 
@@ -129,6 +142,11 @@ def test_grag_query_wires_retrieval_manager_and_search(monkeypatch: pytest.Monke
     def fake_init():
         called["init"] += 1
 
+    class _FakeCM:
+        def initialize(self):
+            fake_init()
+            return True
+
     class FakeRM:
         def __init__(self, *, milvus_collection_name=None, milvus_graph_index_collection_name=None):
             called["rm_collection"] = milvus_collection_name
@@ -138,7 +156,7 @@ def test_grag_query_wires_retrieval_manager_and_search(monkeypatch: pytest.Monke
             called["search_kwargs"] = dict(kwargs)
             return _Sentinel("retrieval_result")
 
-    monkeypatch.setattr(ep, "initialize_config", fake_init)
+    monkeypatch.setattr(ep, "get_config_manager", lambda: _FakeCM())
     monkeypatch.setattr(ep, "RetrievalManager", FakeRM)
 
     api = ep.GRAG(query_options=ep.QueryOptions(milvus_collection_name="cQ"))
@@ -182,7 +200,11 @@ def test_grag_default_query_collection_follows_build_options(monkeypatch: pytest
 
     called = {"rm_collection": None}
 
-    monkeypatch.setattr(ep, "initialize_config", lambda: None)
+    class _FakeCM:
+        def initialize(self):
+            return True
+
+    monkeypatch.setattr(ep, "get_config_manager", lambda: _FakeCM())
 
     class FakeRM:
         def __init__(self, *, milvus_collection_name=None, milvus_graph_index_collection_name=None):

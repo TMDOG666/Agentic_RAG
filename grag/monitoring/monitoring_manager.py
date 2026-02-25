@@ -11,7 +11,7 @@ from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, Iterator, List, Optional
  
-from grag.config.config_manager import get_settings
+from ..config import get_config_manager
 from grag.monitoring.logger import get_logger
  
  
@@ -52,7 +52,7 @@ class MonitoringManager:
         enabled: Optional[bool] = None,
         base_attrs: Optional[Dict[str, Any]] = None,
     ) -> None:
-        settings = get_settings()
+        settings = get_config_manager().get_settings()
         monitoring_cfg = getattr(settings.system, "monitoring", {}) or {}
  
         resolved_enabled = bool(monitoring_cfg.get("enabled", True))

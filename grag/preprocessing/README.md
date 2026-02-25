@@ -168,7 +168,7 @@ pip install openai
 pip install python-docx
 
 # PDF支持
-pip install PyPDF2
+pip install pypdf
 
 # 表格支持
 pip install pandas openpyxl

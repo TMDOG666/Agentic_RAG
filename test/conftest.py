@@ -104,9 +104,9 @@ def get_real_docx_paths():
 
 
 def load_real_doc_texts(*, use_llm: bool = False):
-    from grag.config import initialize_config
+    from grag.config import get_config_manager
 
-    initialize_config()
+    get_config_manager().initialize()
 
     try:
         __import__("docx")

@@ -1,0 +1,11 @@
+{
+  "source": "mixed_numbering_long",
+  "chunk_count": 1,
+  "chunks": [
+    {
+      "chunk_id": 0,
+      "text": "第一章 章节一\n这里是第一章内容。\n\n1.1 小节\n这里是小节内容。\n\n第二章 章节二\n这里是第二章内容。",
+      "token_count": 9
+    }
+  ]
+}

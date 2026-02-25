@@ -12,14 +12,14 @@ from __future__ import annotations
 
 该 Facade 的设计原则：
 - 只做“调用编排”和“默认值收敛”，不改变底层算法逻辑；
-- 自动初始化配置（initialize_config），避免上层忘记初始化导致 RuntimeError；
+- 自动初始化配置（通过 get_config_manager().initialize()），避免上层忘记初始化导致 RuntimeError；
 - 尽量暴露必要参数（group_id、collection、top_k、过滤条件等），其余保持内部默认。
 """
 
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
-from grag.config import initialize_config
+from grag.config import get_config_manager
 from grag.graph_construction.graph_builder import GraphBuildResult, GraphBuilder
 from grag.retrieval import RetrievalManager, RetrievalResult
 from grag.storage.storage_impl import DataClientGraphStorage
@@ -122,7 +122,7 @@ class GRAG:
             GraphBuildResult：包含 construction 流程结果 + 入库的 document/chunks/embeddings/entities/relations。
         """
 
-        initialize_config()
+        get_config_manager().initialize()
 
         collection = milvus_collection_name
         if collection is None:
@@ -214,7 +214,7 @@ class GRAG:
             RetrievalResult：包含 keyword_hits / semantic_hits / graph（三者的组合）。
         """
 
-        initialize_config()
+        get_config_manager().initialize()
 
         normalized_modes: list[str] = []
         for m in (modes or []):

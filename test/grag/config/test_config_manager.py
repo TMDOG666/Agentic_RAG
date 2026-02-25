@@ -2,14 +2,11 @@
 
 import os
 
-from grag.config.config_manager import (
+from grag.config import (
     ConfigManager,
     get_config_manager,
-    initialize_config,
-    get_grag_config,
-    get_grag_settings
+    ProviderType,
 )
-from grag.config.settings import ProviderType
 
 
 class TestConfigManager:
@@ -143,32 +140,14 @@ class TestConfigManager:
 class TestGlobalFunctions:
     """测试全局函数"""
 
-    def test_initialize_config(self):
-        """测试全局初始化函数"""
-        print("\n=== 测试全局初始化函数 ===")
-        
-        success = initialize_config()
-        assert success, "全局初始化应该成功"
-        print("✅ 全局初始化成功")
+    def test_get_config_manager_singleton(self):
+        """测试获取全局 ConfigManager 单例"""
+        print("\n=== 测试获取全局 ConfigManager 单例 ===")
 
-    def test_get_grag_config(self):
-        """测试获取全局配置"""
-        print("\n=== 测试获取全局配置 ===")
-        
-        initialize_config()
-        config = get_grag_config()
-        
-        assert config is not None, "配置不应为空"
-        assert "llm_provider" in config, "应包含 llm_provider"
-        print(f"✅ 获取全局配置成功")
+        cm = get_config_manager()
+        assert cm.initialize() is True
+        settings = cm.get_settings()
 
-    def test_get_grag_settings(self):
-        """测试获取全局设置"""
-        print("\n=== 测试获取全局设置 ===")
-        
-        initialize_config()
-        settings = get_grag_settings()
-        
         assert settings is not None, "设置不应为空"
         assert hasattr(settings, 'llm_provider'), "应有 llm_provider 属性"
         print(f"✅ 获取全局设置成功")

@@ -32,7 +32,8 @@ from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from grag.monitoring.monitoring_manager import get_current_monitor
 
-from ..config import get_settings
+from ..config import get_config_manager
+
 from ..model.embedding_client import EmbeddingClient
 from ..model.llm_client import LLMClient
 from .entity_relation_parser import ParsedEntity, ParsedRelation
@@ -176,7 +177,7 @@ def _get_embedding_provider_from_config() -> str:
     - 如果为 None/null，则取 embedding_providers 的第一个 key（按 yaml 顺序）
     """
 
-    settings = get_settings()
+    settings = get_config_manager().get_settings()
     cfg = settings.graph_construction.entity_resolution_knowledge_fusion
 
     provider = None
@@ -572,7 +573,7 @@ async def resolve_and_fuse_intra_document(
     errors.extend(emb_errors)
 
     # Step 3) 聚类
-    settings = get_settings()
+    settings = get_config_manager().get_settings()
     cfg = settings.graph_construction.entity_resolution_knowledge_fusion
     clustering_cfg = cfg.get("clustering", {}) if isinstance(cfg, dict) else getattr(cfg, "clustering", {})
     method = clustering_cfg.get("method", "hdbscan") if isinstance(clustering_cfg, dict) else "hdbscan"

@@ -7,7 +7,7 @@ import os
 from logging.handlers import RotatingFileHandler
 from typing import Optional
  
-from grag.config.config_manager import get_settings
+from grag.config import get_config_manager
  
  
 _CONFIGURED: bool = False
@@ -18,7 +18,7 @@ def _configure_root_logger() -> None:
     if _CONFIGURED:
         return
  
-    settings = get_settings()
+    settings = get_config_manager().get_settings()
     logging_cfg = getattr(settings.system, "logging", {}) or {}
     level_name = str(logging_cfg.get("level", "INFO")).upper()
     level = getattr(logging, level_name, logging.INFO)

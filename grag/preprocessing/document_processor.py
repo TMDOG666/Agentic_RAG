@@ -26,9 +26,9 @@ except ImportError:
     docx = None
 
 try:
-    import PyPDF2
+    from pypdf import PdfReader
 except ImportError:
-    PyPDF2 = None
+    PdfReader = None
 
 try:
     import pandas as pd
@@ -41,7 +41,7 @@ except ImportError:
     Image = None
 
 from ..model import get_vision_client
-from ..config import get_grag_settings
+from ..config import get_config_manager
 from .text_cleaner import TextCleaner
 
 
@@ -77,7 +77,7 @@ class DocumentProcessor:
         self._vision_client = None
         # 文本清洗 / 标准化由 TextCleaner 负责
         self._text_cleaner: Optional[TextCleaner] = None
-        self._settings = get_grag_settings()
+        self._settings = get_config_manager().get_settings()
         
     def _get_vision_client(self):
         """获取视觉模型客户端（懒加载）"""
@@ -185,12 +185,21 @@ class DocumentProcessor:
     
     def _process_pdf_file(self, file_path: Path) -> str:
         """处理PDF文件"""
-        if PyPDF2 is None:
-            raise ImportError("处理PDF需要安装: pip install PyPDF2")
+        if PdfReader is None:
+            try:
+                import PyPDF2  # type: ignore
+            except ImportError:
+                PyPDF2 = None  # type: ignore
+
+            if PyPDF2 is None:
+                raise ImportError("处理PDF需要安装: pip install pypdf")
         
         try:
             with open(file_path, 'rb') as f:
-                pdf_reader = PyPDF2.PdfReader(f)
+                if PdfReader is not None:
+                    pdf_reader = PdfReader(f)
+                else:
+                    pdf_reader = PyPDF2.PdfReader(f)  # type: ignore[attr-defined]
                 text_parts = []
                 
                 for page_num in range(len(pdf_reader.pages)):

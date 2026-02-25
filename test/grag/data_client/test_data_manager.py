@@ -1,6 +1,6 @@
 """测试数据层管理器 (DataManager)"""
 
-from grag.config import initialize_config
+from grag.config import get_config_manager
 from grag.data_client import (
     DataManager,
     get_data_manager,
@@ -11,7 +11,7 @@ from grag.data_client import (
 
 
 def _ensure_config():
-    initialize_config()
+    get_config_manager().initialize()
 
 
 class TestDataManager:

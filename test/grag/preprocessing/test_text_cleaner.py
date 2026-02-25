@@ -2,13 +2,13 @@
 
 from pathlib import Path
 
-from grag.config import initialize_config, get_grag_settings, ProviderType
+from grag.config import get_config_manager, ProviderType
 from grag.preprocessing.text_cleaner import TextCleaner
 
 
 def _ensure_config():
     """确保配置已初始化"""
-    initialize_config()
+    get_config_manager().initialize()
 
 
 class TestTextCleaner:

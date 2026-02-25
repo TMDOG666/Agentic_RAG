@@ -19,7 +19,7 @@ from typing import Optional, Dict, Any, Union
 from pathlib import Path
 from openai import OpenAI
 
-from ..config import get_grag_settings, ProviderType
+from ..config import get_config_manager, ProviderType
 
 
 class VisionClient:
@@ -36,7 +36,7 @@ class VisionClient:
         """
         self.provider_name = provider_name
         self._client: Optional[OpenAI] = None
-        self._settings = get_grag_settings()
+        self._settings = get_config_manager().get_settings()
         
     def _get_config(self):
         """获取当前提供商的配置"""

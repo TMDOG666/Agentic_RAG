@@ -10,7 +10,7 @@ from grag.storage.storage_impl import DataClientGraphStorage
 from grag.storage.repositories.postgres_repository import PostgresGraphRepository
 from grag.storage.types import ChunkRecord, DocumentRecord, GraphEntityRecord
 
-from grag.config import initialize_config
+from grag.config import get_config_manager
 from grag.data_client import get_data_manager
 import pytest
 
@@ -115,7 +115,7 @@ def _cleanup_neo4j(*, group_id: str, doc_id: str) -> None:
 
 @pytest.mark.integration
 def test_graph_builder_build_and_save_with_real_db(real_doc_texts, pytestconfig) -> None:
-    initialize_config()
+    get_config_manager().initialize()
     dm = get_data_manager()
 
     assert dm.get_postgres_client().test_connection() is True

@@ -16,7 +16,7 @@ Neo4j 图数据库客户端
 import os
 from typing import Optional, Any, Dict
 
-from ..config import get_grag_settings, ProviderType
+from ..config import get_config_manager, ProviderType
 
 
 def _get_driver():
@@ -44,7 +44,7 @@ class Neo4jClient:
         """
         self.provider_name = provider_name
         self._driver: Any = None
-        self._settings = get_grag_settings()
+        self._settings = get_config_manager().get_settings()
 
     def _get_config(self):
         """获取当前提供商的 Neo4j 配置"""

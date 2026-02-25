@@ -2,7 +2,7 @@
 
 import os
 
-from grag.config import initialize_config
+from grag.config import get_config_manager
 from grag.model.embedding_client import (
     EmbeddingClient,
     get_embedding_client,
@@ -12,7 +12,7 @@ from grag.model.embedding_client import (
 
 def _ensure_config():
     """确保配置已初始化"""
-    initialize_config()
+    get_config_manager().initialize()
 
 
 class TestEmbeddingClient:

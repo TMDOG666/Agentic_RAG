@@ -18,9 +18,9 @@ import os
 from typing import Any, Dict, Optional, List, Union
 from pathlib import Path
 
-from .config_loader import ConfigLoader, load_grag_config
-from .config_validator import ConfigValidator, validate_grag_config, ValidationResult, ValidationLevel
-from .settings import GraphRAGSettings, get_settings, create_settings_from_config, ProviderType
+from .config_loader import ConfigLoader
+from .config_validator import ConfigValidator, ValidationResult, ValidationLevel
+from .settings import GraphRAGSettings, create_settings_from_config, ProviderType
 
 
 class ConfigManager:
@@ -41,6 +41,19 @@ class ConfigManager:
         self._config: Optional[Dict[str, Any]] = None
         self._validation_results: List[ValidationResult] = []
 
+    def _ensure_initialized(self) -> None:
+        """确保配置已初始化。
+
+        这是配置层“唯一入口”策略下的关键保障：
+        - 调用方只需要拿到全局 ConfigManager（get_config_manager）
+        - 任何读取方法（get_config/get_settings/get_provider_config/validate_current_config）
+          在首次使用时都会自动初始化
+        """
+        if self._config is not None and self._settings is not None:
+            return
+        if not self.initialize():
+            raise RuntimeError("配置未初始化，且自动初始化失败")
+
     def initialize(self, config_name: str = "grag_config.yaml",
                   validate: bool = True) -> bool:
         """初始化配置管理器
@@ -54,6 +67,8 @@ class ConfigManager:
         """
         try:
             # 加载配置
+            # - 注意：这里会在 ConfigLoader 内部做 env var 插值替换（${VAR} / ${VAR:default}）。
+            # - 默认会用缓存；若你希望强制重新读取文件请调用 reload_config()。
             self._config = self.config_loader.load_config(config_name)
 
             # 验证配置
@@ -65,6 +80,9 @@ class ConfigManager:
                     return False
 
             # 创建设置对象
+            # settings 是对 raw config 的类型化封装：
+            # - 统一做 pydantic 校验与默认值填充
+            # - 提供 get_provider_config() 等运行时访问接口
             self._settings = create_settings_from_config(self._config)
 
             if validate and self.has_warnings():
@@ -101,8 +119,7 @@ class ConfigManager:
         Raises:
             RuntimeError: 配置未初始化
         """
-        if self._config is None:
-            raise RuntimeError("配置未初始化，请先调用 initialize()")
+        self._ensure_initialized()
         return self._config.copy()
 
     def get_settings(self) -> GraphRAGSettings:
@@ -114,8 +131,7 @@ class ConfigManager:
         Raises:
             RuntimeError: 配置未初始化
         """
-        if self._settings is None:
-            raise RuntimeError("配置未初始化，请先调用 initialize()")
+        self._ensure_initialized()
         return self._settings
 
     def get_validation_results(self) -> List[ValidationResult]:
@@ -152,6 +168,7 @@ class ConfigManager:
         Returns:
             配置值
         """
+        self._ensure_initialized()
         return self.config_loader.get_config_value(self._config or {}, key_path, default)
 
     def set_config_value(self, key_path: str, value: Any) -> None:
@@ -161,8 +178,7 @@ class ConfigManager:
             key_path: 配置键路径
             value: 新值
         """
-        if self._config is None:
-            raise RuntimeError("配置未初始化")
+        self._ensure_initialized()
 
         self.config_loader.set_config_value(self._config, key_path, value)
 
@@ -186,9 +202,7 @@ class ConfigManager:
         Raises:
             RuntimeError: 配置未初始化
         """
-        if self._settings is None:
-            raise RuntimeError("配置未初始化")
-
+        self._ensure_initialized()
         return self._settings.get_provider_config(provider_type, provider_name)
 
     def get_env_var(self, env_var_name: str, default: Optional[str] = None) -> Optional[str]:
@@ -209,9 +223,7 @@ class ConfigManager:
         Returns:
             验证结果列表
         """
-        if self._config is None:
-            raise RuntimeError("配置未初始化")
-
+        self._ensure_initialized()
         self._validation_results = self.config_validator.validate_config(self._config)
         return self._validation_results.copy()
 
@@ -307,73 +319,16 @@ _config_manager_instance: Optional[ConfigManager] = None
 
 
 def get_config_manager() -> ConfigManager:
-    """获取全局配置管理器实例"""
+    """获取全局配置管理器实例
+
+    这是一个进程内 singleton：
+    - 推荐在应用入口调用一次 manager.initialize()
+    - 之后在系统其它模块中直接调用 manager.get_settings()/get_provider_config() 访问
+
+    说明：
+    - 测试场景若需要隔离配置状态，可重置模块级变量 _config_manager_instance（目前没有对外 reset 接口）。
+    """
     global _config_manager_instance
     if _config_manager_instance is None:
         _config_manager_instance = ConfigManager()
     return _config_manager_instance
-
-
-def initialize_config(config_name: str = "grag_config.yaml",
-                     validate: bool = True) -> bool:
-    """初始化全局配置
-
-    Args:
-        config_name: 配置文件名
-        validate: 是否执行验证
-
-    Returns:
-        初始化是否成功
-    """
-    manager = get_config_manager()
-    return manager.initialize(config_name, validate)
-
-
-def get_grag_config() -> Dict[str, Any]:
-    """获取GraphRAG配置字典
-
-    Returns:
-        配置字典
-
-    Raises:
-        RuntimeError: 配置未初始化
-    """
-    manager = get_config_manager()
-    return manager.get_config()
-
-
-def get_grag_settings() -> GraphRAGSettings:
-    """获取GraphRAG设置对象
-
-    Returns:
-        GraphRAGSettings对象
-
-    Raises:
-        RuntimeError: 配置未初始化
-    """
-    manager = get_config_manager()
-    return manager.get_settings()
-
-
-def validate_config() -> List[ValidationResult]:
-    """验证当前配置
-
-    Returns:
-        验证结果列表
-    """
-    manager = get_config_manager()
-    return manager.validate_current_config()
-
-
-def get_provider_config(provider_type: ProviderType, provider_name: Optional[str] = None) -> Any:
-    """获取提供商配置
-
-    Args:
-        provider_type: 提供商类型
-        provider_name: 提供商名称
-
-    Returns:
-        提供商配置对象
-    """
-    manager = get_config_manager()
-    return manager.get_provider_config(provider_type, provider_name)

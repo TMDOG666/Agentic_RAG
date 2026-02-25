@@ -8,7 +8,7 @@ import pytest
 
 project_root = Path(__file__).parent.parent.parent.parent
 
-from grag.config import ProviderType, get_grag_settings, initialize_config
+from grag.config import ProviderType, get_config_manager
 from grag.data_client import get_data_manager
 from grag.graph_construction.graph_builder import GraphBuilder
 from grag.preprocessing.preprocessing_manager import PreprocessingManager
@@ -23,7 +23,7 @@ def _is_local_url(url: str | None) -> bool:
 
 
 def _ensure_real_llm_embedding_ready() -> None:
-    settings = get_grag_settings()
+    settings = get_config_manager().get_settings()
 
     llm_cfg = settings.get_provider_config(ProviderType.LLM)
     llm_api_key = os.environ.get("GRAG_LLM_API_KEY") or os.environ.get(getattr(llm_cfg, "api_key_env", "") or "")
@@ -135,8 +135,8 @@ def _cleanup_neo4j(*, group_id: str, doc_id: str) -> None:
 
 
 @pytest.mark.integration
-def test_real_docs_end_to_end_ingestion_with_real_llm_embedding(request) -> None:
-    initialize_config()
+def test_real_docs_ingestion_end_to_end(real_doc_texts, pytestconfig) -> None:
+    get_config_manager().initialize()
 
     try:
         __import__("docx")

@@ -4,7 +4,7 @@ from pathlib import Path
 
 project_root = Path(__file__).resolve().parents[3]
 
-from grag.config import initialize_config
+from grag.config import get_config_manager
 from grag.preprocessing.preprocessing_manager import (
     PreprocessingManager,
     get_preprocessing_manager,
@@ -13,7 +13,7 @@ from grag.preprocessing.preprocessing_manager import (
 
 def _ensure_config():
     """确保配置已初始化"""
-    initialize_config()
+    get_config_manager().initialize()
 
 
 class TestPreprocessingManager:

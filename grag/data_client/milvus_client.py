@@ -15,7 +15,7 @@ Milvus 向量数据库客户端
 import os
 from typing import Optional, Any, Dict
 
-from ..config import get_grag_settings, ProviderType
+from ..config import get_config_manager, ProviderType
 
 
 def _ensure_milvus():
@@ -48,7 +48,7 @@ class MilvusClient:
         self.provider_name = provider_name
         self._connected = False
         self._alias = DEFAULT_ALIAS
-        self._settings = get_grag_settings()
+        self._settings = get_config_manager().get_settings()
 
     def _get_config(self):
         """获取当前提供商的 Milvus 配置"""

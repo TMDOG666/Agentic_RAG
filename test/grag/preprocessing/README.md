@@ -116,7 +116,7 @@ export SILICONFLOW_API_KEY=your_api_key_here
 pip install openai
 
 # 安装文档处理依赖
-pip install python-docx PyPDF2 pandas openpyxl Pillow
+pip install python-docx pypdf pandas openpyxl Pillow
 ```
 
 ## 测试输出说明
@@ -191,7 +191,7 @@ GraphRAG（Graph-based Retrieval Augmented Generation）是一个基于知识图
 **解决方案**：
 ```bash
 # 安装所有依赖
-pip install python-docx PyPDF2 pandas openpyxl Pillow
+pip install python-docx pypdf pandas openpyxl Pillow
 ```
 
 ### Q4: 文档标准化失败

@@ -2,13 +2,12 @@
 
 import os
 
-from grag.config.settings import (
+from grag.config import (
     GraphRAGSettings,
     ProviderType,
     create_settings_from_config,
-    get_settings
+    get_config_manager,
 )
-from grag.config.config_loader import load_grag_config
 
 
 class TestSettings:
@@ -17,8 +16,10 @@ class TestSettings:
     def test_create_settings_from_config(self):
         """测试从配置创建设置对象"""
         print("\n=== 测试从配置创建设置对象 ===")
-        
-        config = load_grag_config()
+
+        cm = get_config_manager()
+        assert cm.initialize() is True
+        config = cm.get_config()
         settings = create_settings_from_config(config)
         
         assert settings is not None, "设置对象不应为空"
@@ -30,8 +31,10 @@ class TestSettings:
     def test_settings_attributes(self):
         """测试设置对象属性"""
         print("\n=== 测试设置对象属性 ===")
-        
-        config = load_grag_config()
+
+        cm = get_config_manager()
+        assert cm.initialize() is True
+        config = cm.get_config()
         settings = create_settings_from_config(config)
         
         # 验证默认提供商
@@ -51,8 +54,10 @@ class TestSettings:
     def test_llm_provider_config(self):
         """测试 LLM 提供商配置"""
         print("\n=== 测试 LLM 提供商配置 ===")
-        
-        config = load_grag_config()
+
+        cm = get_config_manager()
+        assert cm.initialize() is True
+        config = cm.get_config()
         settings = create_settings_from_config(config)
         
         # 获取默认 LLM 配置
@@ -72,8 +77,10 @@ class TestSettings:
     def test_embedding_provider_config(self):
         """测试 Embedding 提供商配置"""
         print("\n=== 测试 Embedding 提供商配置 ===")
-        
-        config = load_grag_config()
+
+        cm = get_config_manager()
+        assert cm.initialize() is True
+        config = cm.get_config()
         settings = create_settings_from_config(config)
         
         # 获取默认 Embedding 配置
@@ -91,8 +98,10 @@ class TestSettings:
     def test_vector_db_config(self):
         """测试向量数据库配置"""
         print("\n=== 测试向量数据库配置 ===")
-        
-        config = load_grag_config()
+
+        cm = get_config_manager()
+        assert cm.initialize() is True
+        config = cm.get_config()
         settings = create_settings_from_config(config)
         
         # 获取 Milvus 配置
@@ -114,8 +123,10 @@ class TestSettings:
     def test_graph_db_config(self):
         """测试图数据库配置"""
         print("\n=== 测试图数据库配置 ===")
-        
-        config = load_grag_config()
+
+        cm = get_config_manager()
+        assert cm.initialize() is True
+        config = cm.get_config()
         settings = create_settings_from_config(config)
         
         # 获取 Neo4j 配置
@@ -137,8 +148,10 @@ class TestSettings:
     def test_relational_db_config(self):
         """测试关系数据库配置"""
         print("\n=== 测试关系数据库配置 ===")
-        
-        config = load_grag_config()
+
+        cm = get_config_manager()
+        assert cm.initialize() is True
+        config = cm.get_config()
         settings = create_settings_from_config(config)
         
         # 获取 PostgreSQL 配置
@@ -162,8 +175,10 @@ class TestSettings:
     def test_system_config(self):
         """测试系统配置"""
         print("\n=== 测试系统配置 ===")
-        
-        config = load_grag_config()
+
+        cm = get_config_manager()
+        assert cm.initialize() is True
+        config = cm.get_config()
         settings = create_settings_from_config(config)
         
         assert hasattr(settings, 'system'), "应有 system 属性"
@@ -181,8 +196,10 @@ class TestSettings:
     def test_preprocessing_config(self):
         """测试预处理配置"""
         print("\n=== 测试预处理配置 ===")
-        
-        config = load_grag_config()
+
+        cm = get_config_manager()
+        assert cm.initialize() is True
+        config = cm.get_config()
         settings = create_settings_from_config(config)
         
         assert hasattr(settings, 'preprocessing'), "应有 preprocessing 属性"
@@ -198,8 +215,10 @@ class TestSettings:
     def test_graph_construction_config(self):
         """测试图构建配置"""
         print("\n=== 测试图构建配置 ===")
-        
-        config = load_grag_config()
+
+        cm = get_config_manager()
+        assert cm.initialize() is True
+        config = cm.get_config()
         settings = create_settings_from_config(config)
         
         assert hasattr(settings, 'graph_construction'), "应有 graph_construction 属性"
@@ -217,8 +236,10 @@ class TestSettings:
     def test_retrieval_config(self):
         """测试检索配置"""
         print("\n=== 测试检索配置 ===")
-        
-        config = load_grag_config()
+
+        cm = get_config_manager()
+        assert cm.initialize() is True
+        config = cm.get_config()
         settings = create_settings_from_config(config)
         
         assert hasattr(settings, 'retrieval'), "应有 retrieval 属性"
@@ -235,14 +256,16 @@ class TestSettings:
         print(f"   图检索: {retrieval.graph_search.get('enabled')}")
         print(f"   融合检索: {retrieval.fusion_search.get('enabled')}")
 
-    def test_get_settings_function(self):
-        """测试全局 get_settings 函数"""
-        print("\n=== 测试全局 get_settings 函数 ===")
-        
-        settings = get_settings()
-        
+    def test_get_config_manager_and_settings(self):
+        """测试全局 get_config_manager 单例与 settings 访问"""
+        print("\n=== 测试全局 get_config_manager 单例与 settings 访问 ===")
+
+        cm = get_config_manager()
+        assert cm.initialize() is True
+        settings = cm.get_settings()
+
         assert settings is not None, "设置不应为空"
         assert isinstance(settings, GraphRAGSettings), "应该是 GraphRAGSettings 类型"
-        
+
         print(f"✅ 全局设置获取成功")
         print(f"   LLM 提供商: {settings.llm_provider}")

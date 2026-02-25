@@ -1,7 +1,7 @@
 from grag.storage.repositories.neo4j_repository import Neo4jGraphRepository
 from grag.storage.types import DocumentRecord, GraphEntityRecord, GraphRelationRecord
 
-from grag.config import initialize_config
+from grag.config import get_config_manager
 from grag.data_client import get_data_manager
 
 
@@ -37,7 +37,7 @@ def _cleanup_neo4j(*, group_id: str, doc_id: str) -> None:
 
 class TestNeo4jGraphRepositoryRealDB:
     def test_real_connection_and_upsert_and_cleanup(self) -> None:
-        initialize_config()
+        get_config_manager().initialize()
         dm = get_data_manager()
 
         assert dm.get_neo4j_client().test_connection() is True

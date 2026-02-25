@@ -5,7 +5,7 @@ from typing import Any, Callable, List, Optional
 
 from grag.monitoring.monitoring_manager import get_current_monitor
 
-from ..config import get_settings
+from ..config import get_config_manager
 from ..model.llm_client import LLMClient
 
 
@@ -150,7 +150,7 @@ class EntityRelationExtractor:
                 - 传入时：用于测试/自定义调用
                 - 不传：默认使用配置里的 `model_provider` 构造 `LLMClient(model_provider).chat`
         """
-        settings = get_settings()
+        settings = get_config_manager().get_settings()
         cfg = settings.graph_construction.entity_relation_extraction
 
         def _get_value(key: str, default: Any):

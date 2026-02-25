@@ -1,11 +1,11 @@
 """测试 Milvus 客户端 (MilvusClient)"""
 
-from grag.config import initialize_config
+from grag.config import get_config_manager
 from grag.data_client.milvus_client import MilvusClient, get_milvus_client
 
 
 def _ensure_config():
-    initialize_config()
+    get_config_manager().initialize()
 
 
 class TestMilvusClient:

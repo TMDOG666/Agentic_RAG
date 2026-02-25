@@ -27,7 +27,7 @@ from typing import List, Optional, Dict, Any, Tuple, Union
 from pathlib import Path
 
 from langchain_openai import OpenAIEmbeddings
-from ..config import get_grag_settings, ProviderType
+from ..config import get_config_manager, ProviderType
 
 
 class RerankerClient:
@@ -44,7 +44,7 @@ class RerankerClient:
         """
         self.provider_name = provider_name
         self._reranker = None
-        self._settings = get_grag_settings()
+        self._settings = get_config_manager().get_settings()
 
     def is_available(self) -> bool:
         """检查重排序服务是否可用

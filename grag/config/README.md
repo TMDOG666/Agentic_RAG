@@ -1,342 +1,177 @@
-# GraphRAG 配置层
+# GraphRAG 配置模块（`grag.config`）
 
-## 概述
+本 README 描述 `grag/config` 子模块的结构、对外接口和推荐调用方式。
 
-配置层是GraphRAG系统的核心组件之一，负责管理所有配置相关的操作，包括配置文件的加载、验证、类型检查和运行时管理。
+从本次整理开始，配置层遵循 **单入口、单缓存** 原则：
 
-## 架构组件
+- 只允许通过 `get_config_manager()` 获取全局 `ConfigManager` singleton，并通过它访问配置。
 
-### 1. 配置加载器 (ConfigLoader)
+- 不再提供“隐式加载配置文件”的旧 helper（例如 loader/settings 层的全局函数）。
 
-**文件**: `config_loader.py`
+这能避免：
 
-**职责**:
-- 加载YAML配置文件
-- 处理环境变量插值替换 (`${VAR_NAME}` 格式)
-- 支持多配置文件合并
-- 提供配置缓存和热重载机制
+- 两套 singleton 导致配置来源不一致
+- 测试时缓存污染、初始化顺序不确定
 
-**核心特性**:
-- 环境变量支持: `${ENV_VAR_NAME}` 或 `${ENV_VAR_NAME:default_value}`
-- 缓存机制: 避免重复读取文件
-- 文件变更检测: 自动检测配置文件的修改
+## 快速开始
 
-### 2. 配置验证器 (ConfigValidator)
+```python
+from grag.config import get_config_manager, ProviderType
 
-**文件**: `config_validator.py`
+cm = get_config_manager()
+assert cm.initialize() is True
+settings = cm.get_settings()
 
-**职责**:
-- 验证配置文件的结构和类型
-- 检查必需的配置项
-- 验证配置值的合理性范围
-- 提供详细的验证错误信息和修复建议
+llm_cfg = settings.get_provider_config(ProviderType.LLM)
+emb_cfg = settings.get_provider_config(ProviderType.EMBEDDING)
+```
 
-**验证类型**:
-- **ERROR**: 必须修复的错误，系统无法正常运行
-- **WARNING**: 建议修复的警告，可能影响性能或功能
-- **INFO**: 信息提示，用于优化配置
+说明：
 
-### 3. 类型化设置 (GraphRAGSettings)
+- `ConfigManager.get_settings()` / `get_config()` / `get_provider_config()` 等方法会在首次使用时自动 `initialize()`。
+  但在应用入口显式 `cm.initialize()` 仍然推荐（失败能更早暴露）。
 
-**文件**: `settings.py`
+## 目录结构与职责
 
-**职责**:
-- 提供类型安全的配置访问接口
-- 使用Pydantic进行数据验证
-- 定义所有配置项的数据结构
+```
+grag/config/
+├── __init__.py
+├── config_loader.py
+├── config_validator.py
+├── settings.py
+├── config_manager.py
+└── README.md
+```
 
-**主要配置类**:
-- `LLMProviderConfig`: LLM提供商配置
-- `EmbeddingProviderConfig`: 向量嵌入提供商配置
-- `RerankerProviderConfig`: 重排序提供商配置
-- `VectorDatabaseConfig`: 向量数据库配置
-- `GraphDatabaseConfig`: 图数据库配置
-- `RelationalDatabaseConfig`: 关系数据库配置
-- `GraphRAGSettings`: 完整的系统配置
+- **config_loader.py / ConfigLoader**
+  - 读取 YAML（默认 `config/grag_config.yaml`）
+  - 处理 `${ENV}` / `${ENV:default}` 字符串插值
+  - 提供缓存与热重载（基于 checksum）
 
-### 4. 配置管理器 (ConfigManager)
+- **config_validator.py / ConfigValidator**
+  - 结构/合理性验证（必填字段、provider 引用是否存在、数值范围等）
+  - 产出 `ValidationResult` 列表（ERROR/WARNING/INFO）
 
-**文件**: `config_manager.py`
+- **settings.py / GraphRAGSettings（Pydantic）**
+  - 将 raw dict 配置转为强类型对象
+  - 统一默认值、字段类型校验
+  - 对外提供 `GraphRAGSettings.get_provider_config()`
 
-**职责**:
-- 统一管理所有配置相关操作
-- 提供配置的初始化和验证流程
-- 管理配置的生命周期
-- 提供便捷的配置访问方法
+- **config_manager.py / ConfigManager（权威入口）**
+  - 串联 `ConfigLoader -> ConfigValidator -> GraphRAGSettings`
+  - 保存 config/settings/validation_results 的生命周期状态
+  - 作为唯一对外入口（通过 `get_config_manager()` 获取 singleton）
 
-**核心功能**:
-- 配置初始化和验证
-- 提供商配置获取
-- 配置运行时修改
-- 配置导出功能
+## 对外接口（Public API）
 
-## 配置结构
+推荐仅从 `grag.config` 导入以下接口（`grag/config/__init__.py` 已 re-export）：
 
-### 主要配置项
+- **get_config_manager() -> ConfigManager**
+  - 获取全局配置管理器 singleton（唯一入口）
+  - 方法：
+    - `initialize(config_name="grag_config.yaml", validate=True) -> bool`
+    - `get_settings() -> GraphRAGSettings`
+    - `get_config() -> dict`
+    - `get_provider_config(provider_type, provider_name=None)`
+    - `validate_current_config() -> list[ValidationResult]`
+    - `reload_config()` / `set_config_value()` 等
+
+## 推荐调用流程（初始化与读取）
+
+应用入口：
+
+1. `cm = get_config_manager()`
+2. `cm.initialize()`
+3. `settings = cm.get_settings()`
+3. 各模块从 settings 读取配置
+
+模块内部（非入口处）：
+
+- 只调用 `get_config_manager().get_settings()`（或直接复用已注入的 settings），不要自行读取 YAML。
+
+## 配置文件概览（schema 方向）
+
+默认配置文件路径：
+
+- `config/grag_config.yaml`
+
+顶级字段示例（只展示骨架，具体字段见项目的 `config/grag_config.yaml`）：
 
 ```yaml
-# 默认提供商选择
 llm_provider: siliconflow
 embedding_provider: siliconflow
-reranker_provider: siliconflow  # 可选
 vector_db_provider: milvus
 graph_db_provider: neo4j
 relational_db_provider: postgres
 
-# 提供商具体配置
 llm_providers:
   siliconflow:
-    model: Qwen/Qwen3-Next-80B-A3B-Instruct
-    base_url: https://api.siliconflow.cn/v1
-    api_key_env: SILICONFLOW_API_KEY
-    temperature: 0.1
-    max_tokens: 4096
+    model: ...
+    base_url: ...
+    api_key_env: ...
 
 embedding_providers:
   siliconflow:
-    model: BAAI/bge-m3
+    model: ...
     dimension: 1024
-    api_key_env: SILICONFLOW_API_KEY
+    max_batch_size: 64
 
-# 数据库配置
 vector_databases:
   milvus:
-    host: localhost
+    host: ...
     port: 19530
-    collection_name: grag_documents
+    collection_name: ...
 
 graph_databases:
   neo4j:
-    uri: bolt://localhost:7687
-    user: neo4j
-    password_env: NEO4J_PASSWORD
+    uri: ...
+    user: ...
+    password_env: ...
 
 relational_databases:
   postgres:
-    host: localhost
-    port: 5432
-    database: grag
-    user: postgres
-    password_env: POSTGRES_PASSWORD
+    host: ...
+    port: ...
+    database: ...
+    user: ...
+    password_env: ...
 
-# 系统配置
 system:
   workspace_dir: ./data
-  logging:
-    level: INFO
-    file_path: ./logs/grag.log
+  logging: {...}
+  monitoring: {...}
 
-# 各层配置
-preprocessing:
-  text_cleaning:
-    remove_html: true
-    normalize_whitespace: true
-
-graph_construction:
-  chunking:
-    strategy: semantic
-    chunk_size: 512
-
-retrieval:
-  keyword_search:
-    enabled: true
-    top_k: 20
-
-monitoring:
-  enabled: true
-  metrics_port: 9090
+graph_construction: {...}
+retrieval: {...}
 ```
 
-## 使用方法
+## 环境变量插值（`${ENV}`）
 
-### 基本使用
+`ConfigLoader` 支持在 YAML 值中写：
 
-```python
-from grag.config import initialize_config, get_grag_settings
+- `${ENV_VAR_NAME}`
+- `${ENV_VAR_NAME:default_value}`
 
-# 初始化配置
-success = initialize_config()
-if not success:
-    print("配置初始化失败")
-    exit(1)
-
-# 获取设置
-settings = get_grag_settings()
-
-# 访问配置
-llm_config = settings.get_provider_config(ProviderType.LLM)
-embedding_config = settings.get_provider_config(ProviderType.EMBEDDING)
-```
-
-### 高级功能
-
-```python
-from grag.config import ConfigManager, validate_config
-
-# 创建自定义配置管理器
-config_manager = ConfigManager()
-
-# 加载并验证配置
-success = config_manager.initialize(validate=True)
-
-# 获取验证结果
-validation_results = config_manager.get_validation_results()
-
-# 运行时修改配置
-config_manager.set_config_value("llm_providers.siliconflow.temperature", 0.2)
-
-# 导出配置
-config_manager.export_config("exported_config.yaml")
-```
-
-### 环境变量支持
-
-配置文件支持环境变量插值：
+示例：
 
 ```yaml
 llm_providers:
   siliconflow:
-    api_key_env: SILICONFLOW_API_KEY  # 使用环境变量值
-    base_url: ${API_BASE_URL:https://api.siliconflow.cn/v1}  # 支持默认值
+    base_url: ${API_BASE_URL:https://api.siliconflow.cn/v1}
 ```
 
-## 环境变量
+## 常见问题（Troubleshooting）
 
-### 必需的环境变量
+- **Q: 为什么我没调用 initialize 也能跑？**
+  - A: `ConfigManager` 的读取方法会在首次使用时尝试自动 `initialize()`；但入口处显式初始化更可控。
 
-根据配置中的 `*_env` 字段设置相应的环境变量：
+- **Q: 修改了 YAML 为什么不生效？**
+  - A: `ConfigLoader` 有缓存（checksum）。你可以：
+    - 调 `ConfigManager.reload_config()`
+    - 或重启进程
 
-```bash
-# Linux/Mac
-export SILICONFLOW_API_KEY=your_api_key
-export NEO4J_PASSWORD=your_password
-export POSTGRES_PASSWORD=your_password
+- **Q: embeddings 报 413 / batch size exceeded？**
+  - A: provider 的 batch size 需要在 `embedding_providers.<name>.max_batch_size` 中正确设置；客户端侧会按该值分批。
 
-# Windows PowerShell
-$env:SILICONFLOW_API_KEY="your_api_key"
-$env:NEO4J_PASSWORD="your_password"
-$env:POSTGRES_PASSWORD="your_password"
-```
-
-### 可选的环境变量
-
-```bash
-# 覆盖默认提供商
-export GRAG_LLM_PROVIDER=openai
-export GRAG_EMBEDDING_PROVIDER=openai
-
-# 覆盖连接参数
-export GRAG_NEO4J_URI=bolt://remote-host:7687
-```
-
-## 验证和调试
-
-### 配置验证
-
-```python
-from grag.config import validate_config, print_validation_results
-
-# 验证当前配置
-results = validate_config()
-
-# 打印验证结果
-print_validation_results(results)
-```
-
-### 测试配置
-
-运行测试脚本验证配置是否正确：
-
-```bash
-python test_config.py
-```
-
-### 常见问题
-
-1. **配置加载失败**
-   - 检查 `config/grag_config.yaml` 文件是否存在
-   - 验证YAML语法是否正确
-
-2. **环境变量未设置**
-   - 检查必需的环境变量是否已设置
-   - 使用 `echo $ENV_VAR_NAME` 验证变量值
-
-3. **验证失败**
-   - 查看详细的验证错误信息
-   - 根据建议修复配置问题
-
-4. **提供商配置缺失**
-   - 确保 `llm_providers`、`embedding_providers` 等配置完整
-   - 检查默认提供商名称是否在对应配置中定义
-
-## 扩展配置
-
-### 添加自定义验证器
-
-```python
-from grag.config import ConfigManager, ValidationResult, ValidationLevel
-
-def custom_validator(config, field_path):
-    """自定义验证器示例"""
-    results = []
-
-    # 检查自定义业务逻辑
-    if config.get("custom_field") == "invalid_value":
-        results.append(ValidationResult(
-            level=ValidationLevel.ERROR,
-            field_path="custom_field",
-            message="自定义字段值无效",
-            suggestion="请使用有效值"
-        ))
-
-    return results
-
-# 添加自定义验证器
-config_manager = ConfigManager()
-config_manager.add_custom_validator("custom_section", custom_validator)
-```
-
-### 运行时配置更新
-
-```python
-from grag.config import get_config_manager
-
-# 获取配置管理器
-manager = get_config_manager()
-
-# 更新配置值
-manager.set_config_value("system.logging.level", "DEBUG")
-
-# 重新验证配置
-results = manager.validate_current_config()
-```
-
-## 依赖项
-
-配置层需要以下Python包：
-
-```
-pydantic>=2.0.0      # 类型验证和设置管理
-pyyaml>=6.0          # YAML文件解析
-```
-
-## 文件结构
-
-```
-grag/config/
-├── __init__.py           # 包导出
-├── config_loader.py      # 配置加载器
-├── config_validator.py   # 配置验证器
-├── settings.py          # 类型化设置
-├── config_manager.py    # 配置管理器
-└── README.md           # 本文档
-```
-
-## 设计原则
-
-1. **类型安全**: 使用Pydantic确保配置的类型安全
-2. **环境隔离**: 支持多环境配置和环境变量覆盖
-3. **验证完整**: 全面验证配置的正确性和合理性
-4. **易于扩展**: 支持自定义验证器和配置项
-5. **运行时灵活**: 支持运行时配置更新和热重载
-6. **错误友好**: 提供详细的错误信息和修复建议
+- **Q: pytest 收集阶段报缺包（例如 langchain_openai）？**
+  - A: 确保 pytest 运行在正确的虚拟环境/conda env 中（你的依赖必须安装在同一个 python 里）。

@@ -8,13 +8,13 @@
 - 提供连接测试、资源清理
 
 说明：
-- 使用前需先调用 grag.config.initialize_config() 加载配置
+- 使用前建议在应用入口调用 get_config_manager().initialize() 加载配置
 - 各客户端懒加载，首次访问时创建
 """
 
 from typing import Optional, Dict, Any
 
-from ..config import get_grag_settings
+from ..config import get_config_manager
 from .neo4j_client import Neo4jClient
 from .milvus_client import MilvusClient
 from .postgres_client import PostgresClient
@@ -28,7 +28,7 @@ class DataManager:
     """
 
     def __init__(self):
-        self._settings = get_grag_settings()
+        self._settings = get_config_manager().get_settings()
         self._neo4j: Optional[Neo4jClient] = None
         self._milvus: Optional[MilvusClient] = None
         self._postgres: Optional[PostgresClient] = None

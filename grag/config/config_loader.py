@@ -74,6 +74,9 @@ class ConfigLoader:
         config_path = self.config_dir / config_name
 
         # 检查缓存
+        # - 默认会命中缓存（同名 config_name）
+        # - 缓存有效性依据：文件 checksum 未变化
+        # - 想绕开缓存：传 force_reload=True 或调用 clear_cache()
         if not force_reload and config_name in self._cache:
             cached = self._cache[config_name]
             # 检查文件是否被修改
@@ -94,6 +97,10 @@ class ConfigLoader:
             raw_config = {}
 
         # 处理环境变量插值
+        # 支持：
+        # - ${ENV_VAR_NAME}
+        # - ${ENV_VAR_NAME:default_value}
+        # 说明：这里只做字符串插值替换；不做 "GRAG_XXX" 这种 key override（那属于另一类功能）。
         processed_config = self._process_env_vars(raw_config)
 
         # 创建加载结果
@@ -303,43 +310,3 @@ class ConfigLoader:
                 for name, result in self._cache.items()
             }
         }
-
-
-# 全局配置加载器实例
-_default_loader = None
-
-
-def get_config_loader() -> ConfigLoader:
-    """获取默认的配置加载器实例"""
-    global _default_loader
-    if _default_loader is None:
-        _default_loader = ConfigLoader()
-    return _default_loader
-
-
-def load_grag_config(force_reload: bool = False) -> Dict[str, Any]:
-    """加载GraphRAG配置文件
-
-    Args:
-        force_reload: 是否强制重新加载
-
-    Returns:
-        GraphRAG配置字典
-    """
-    loader = get_config_loader()
-    return loader.load_config("grag_config.yaml", force_reload)
-
-
-def get_config_value(key_path: str, default: Any = None) -> Any:
-    """从GraphRAG配置中获取值
-
-    Args:
-        key_path: 配置键路径
-        default: 默认值
-
-    Returns:
-        配置值
-    """
-    config = load_grag_config()
-    loader = get_config_loader()
-    return loader.get_config_value(config, key_path, default)

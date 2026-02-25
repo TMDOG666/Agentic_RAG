@@ -10,7 +10,7 @@ from grag.storage.types import (
     GraphRelationRecord,
 )
 
-from grag.config import initialize_config
+from grag.config import get_config_manager
 from grag.data_client import get_data_manager
 
 
@@ -82,7 +82,7 @@ def _cleanup_real_storage(*, group_id: str, doc_id: str, chunk_ids: list[str]) -
 
 class TestDataClientGraphStorageRealDB:
     def test_real_connection_write_and_cleanup(self) -> None:
-        initialize_config()
+        get_config_manager().initialize()
         dm = get_data_manager()
 
         assert dm.get_postgres_client().test_connection() is True

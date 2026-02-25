@@ -1,0 +1,10 @@
+[
+  {
+    "chunk_id": "chunk_1_d04b0e6973094e408e46f3825138ecd3",
+    "text": "演示实体与演示实体存在关系。他们发生了某件事。",
+    "document_coreference_raw": "[]",
+    "document_coref_error": null,
+    "entity_relation_raw": "entity<|SEP|>演示实体<|SEP|>概念<|SEP|>用于端到端测试\nrelation<|SEP|>演示实体<|SEP|>演示实体<|SEP|>自环关系<|SEP|>测试<|SEP|>5\n<|DONE|>",
+    "error": null
+  }
+]

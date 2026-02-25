@@ -18,7 +18,7 @@ import re
 from types import SimpleNamespace
 from typing import Callable, List, Optional, Sequence, Tuple
 from grag.monitoring.monitoring_manager import get_current_monitor
-from ..config import get_settings
+from ..config import get_config_manager
 
 def _default_token_counter(text: str) -> int:
     """默认 token 计数器。
@@ -57,7 +57,7 @@ class SemanticChunker:
             enable_fallback: 是否启用回退机制
             fallback_fixed_step_chars: 回退机制固定步长（字符数）
         """
-        settings = get_settings()
+        settings = get_config_manager().get_settings()
 
         cfg = settings.graph_construction.chunking
 

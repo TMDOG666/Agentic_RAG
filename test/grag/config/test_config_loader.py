@@ -3,7 +3,7 @@
 import os
 import pytest
 
-from grag.config.config_loader import ConfigLoader, load_grag_config, get_config_value
+from grag.config import ConfigLoader, get_config_manager
 
 
 class TestConfigLoader:
@@ -161,28 +161,16 @@ class TestConfigLoader:
 class TestGlobalFunctions:
     """测试全局函数"""
 
-    def test_load_grag_config_function(self):
-        """测试全局 load_grag_config 函数"""
-        print("\n=== 测试全局 load_grag_config 函数 ===")
-        
-        config = load_grag_config()
-        
+    def test_get_grag_config_function(self):
+        """测试通过 get_config_manager 获取全局配置"""
+        print("\n=== 测试通过 get_config_manager 获取全局配置 ===")
+
+        cm = get_config_manager()
+        assert cm.initialize() is True
+        config = cm.get_config()
+
         assert config is not None, "配置不应为空"
         assert "llm_provider" in config, "应包含 llm_provider"
-        
-        print(f"✅ 全局函数加载成功")
-        print(f"   LLM 提供商: {config['llm_provider']}")
 
-    def test_get_config_value_function(self):
-        """测试全局 get_config_value 函数"""
-        print("\n=== 测试全局 get_config_value 函数 ===")
-        
-        # 获取配置值
-        llm_provider = get_config_value("llm_provider")
-        assert llm_provider is not None, "应该能获取到 LLM 提供商"
-        print(f"✅ LLM 提供商: {llm_provider}")
-        
-        # 获取嵌套值
-        model = get_config_value("llm_providers.siliconflow.model")
-        assert model is not None, "应该能获取到模型名称"
-        print(f"✅ 模型名称: {model}")
+        print(f"✅ 全局函数获取成功")
+        print(f"   LLM 提供商: {config['llm_provider']}")

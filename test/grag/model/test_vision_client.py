@@ -1,12 +1,12 @@
 """测试视觉模型客户端 (VisionClient)"""
 
-from grag.config import initialize_config, get_grag_settings, ProviderType
+from grag.config import get_config_manager, ProviderType
 from grag.model import VisionClient, get_vision_client
 
 
 def _ensure_config():
     """确保配置已初始化"""
-    initialize_config()
+    get_config_manager().initialize()
 
 
 class TestVisionClient:
@@ -31,7 +31,7 @@ class TestVisionClient:
         assert "base_url" in info
         assert "timeout" in info
 
-        settings = get_grag_settings()
+        settings = get_config_manager().get_settings()
         vision_cfg = settings.get_provider_config(ProviderType.VISION)
 
         assert info["provider"] == settings.vision_provider, "视觉提供商应与配置一致"

@@ -15,7 +15,7 @@
 """
 
 from typing import Any, Dict, Optional, Union, List
-from pydantic import BaseModel, Field, validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from enum import Enum
 import os
 
@@ -40,10 +40,11 @@ class LLMProviderConfig(BaseModel):
     max_tokens: int = Field(4096, gt=0, description="最大token数")
     timeout: int = Field(60, gt=0, description="请求超时时间(秒)")
 
-    @validator('model')
-    def validate_model(cls, v):
+    @field_validator("model")
+    @classmethod
+    def validate_model(cls, v: str) -> str:
         if not v or not v.strip():
-            raise ValueError('model不能为空')
+            raise ValueError("model不能为空")
         return v.strip()
 
 
@@ -53,6 +54,8 @@ class EmbeddingProviderConfig(BaseModel):
     base_url: Optional[str] = Field(None, description="API基础URL")
     api_key_env: Optional[str] = Field(None, description="API密钥环境变量名")
     dimension: int = Field(..., gt=0, description="向量维度")
+    # 单次 embedding 请求中允许传入的最大文本条数（batch size）。
+    # 不同网关/供应商限制不同（例如 64）；若超过限制常见会返回 413。
     max_batch_size: int = Field(32, gt=0, description="最大批处理大小")
     timeout: int = Field(60, gt=0, description="请求超时时间(秒)")
 
@@ -276,6 +279,8 @@ class RetrievalConfig(BaseModel):
 class GraphRAGSettings(BaseModel):
     """GraphRAG完整配置设置"""
     # 默认提供商
+    # 这些字段决定了“不显式指定 provider_name 时”系统采用哪个 provider。
+    # 例如 get_provider_config(ProviderType.EMBEDDING) 会默认使用 embedding_provider。
     llm_provider: str = Field(..., description="默认LLM提供商")
     embedding_provider: str = Field(..., description="默认向量嵌入提供商")
     reranker_provider: Optional[str] = Field(None, description="默认重排序提供商")
@@ -428,50 +433,3 @@ def create_settings_from_config(config: Dict[str, Any]) -> GraphRAGSettings:
         return GraphRAGSettings(**config)
     except Exception as e:
         raise ValueError(f"配置验证失败: {e}") from e
-
-
-# 全局设置实例
-_settings_instance: Optional[GraphRAGSettings] = None
-
-
-def get_settings(force_reload: bool = False) -> GraphRAGSettings:
-    """获取GraphRAG设置实例
-
-    Args:
-        force_reload: 是否强制重新加载配置
-
-    Returns:
-        GraphRAGSettings实例
-    """
-    global _settings_instance
-
-    if _settings_instance is None or force_reload:
-        from .config_loader import load_grag_config
-        config = load_grag_config(force_reload)
-        _settings_instance = create_settings_from_config(config)
-
-    return _settings_instance
-
-
-def update_settings(updates: Dict[str, Any]) -> None:
-    """更新设置（运行时修改）
-
-    Args:
-        updates: 要更新的配置项
-    """
-    global _settings_instance
-
-    if _settings_instance is None:
-        _settings_instance = get_settings()
-
-    # 这里可以实现运行时的配置更新逻辑
-    # 注意：某些配置项可能需要在重启后才能生效
-    for key, value in updates.items():
-        if hasattr(_settings_instance, key):
-            setattr(_settings_instance, key, value)
-
-
-def reset_settings() -> None:
-    """重置设置缓存"""
-    global _settings_instance
-    _settings_instance = None
