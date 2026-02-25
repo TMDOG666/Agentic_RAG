@@ -18,12 +18,15 @@
 
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from typing import Optional
 
 from grag.retrieval.base_retriever.base_retrieval_manager import (
     BaseRetrievalManager,
     RetrievalResult,
 )
+from grag.retrieval.base_retriever.graph_retriever import GraphSubgraphResult
+from grag.retrieval.utils.query_decomposition import split_high_low
+from grag.retrieval.utils.reranker import rerank_chunk_hits, rerank_graph_nodes
 
 
 class AdvancedRetrievalManager:
@@ -41,75 +44,233 @@ class AdvancedRetrievalManager:
         )
 
     @staticmethod
-    def _normalize_modes(modes: Sequence[str]) -> list[str]:
-        out: list[str] = []
-        for m in modes or []:
-            s = str(m).strip().lower()
-            if not s:
-                continue
-            out.append(s)
-        return out
+    def _require_group_id(group_id: str) -> None:
+        if not str(group_id or "").strip():
+            raise ValueError("group_id is required")
 
-    def search(
+    def _search_local(
         self,
         *,
         group_id: str,
         query: str,
-        modes: Sequence[str],
+        top_k: int,
+        doc_id: Optional[str],
+        graph_entity_name: Optional[str],
+        graph_max_depth: int,
+        graph_limit: int,
+    ) -> GraphSubgraphResult:
+        low_from_param = []
+        if graph_entity_name and "," in str(graph_entity_name):
+            low_from_param = [s.strip() for s in str(graph_entity_name).split(",") if s.strip()]
+
+        if low_from_param:
+            low_keywords = low_from_param
+        else:
+            _, low = split_high_low(query)
+            low_keywords = [low] if str(low or "").strip() else []
+
+        seeds: list[str] = []
+        for kw in low_keywords or []:
+            hits = self._base.search_entities_vector(
+                group_id=group_id,
+                query=str(kw),
+                top_k=max(3, min(10, int(top_k))),
+                doc_id=doc_id,
+                output_fields=["name", "pk", "doc_id", "group_id", "source_id"],
+            )
+            for h in hits or []:
+                nm = str(h.get("name") or "").strip()
+                if nm:
+                    seeds.append(nm)
+
+        return self._base.expand_graph_by_entities(
+            group_id=group_id,
+            entity_names=seeds,
+            max_depth=int(graph_max_depth),
+            limit=int(graph_limit),
+            doc_id=doc_id,
+        )
+
+    def _search_global(
+        self,
+        *,
+        group_id: str,
+        query: str,
+        top_k: int,
+        doc_id: Optional[str],
+        graph_entity_name: Optional[str],
+        graph_max_depth: int,
+        graph_limit: int,
+    ) -> Optional[dict]:
+        high_from_param = []
+        if graph_entity_name and "," in str(graph_entity_name):
+            high_from_param = [s.strip() for s in str(graph_entity_name).split(",") if s.strip()]
+
+        if high_from_param:
+            high_keywords = high_from_param
+        else:
+            high, _ = split_high_low(query)
+            high_keywords = [high] if str(high or "").strip() else []
+
+        triples: list[dict] = []
+        for kw in high_keywords or []:
+            hits = self._base.search_relations_vector(
+                group_id=group_id,
+                query=str(kw),
+                top_k=max(3, min(10, int(top_k))),
+                doc_id=doc_id,
+                output_fields=["head_name", "tail_name", "relation_type", "pk", "doc_id", "group_id"],
+            )
+            triples.extend(list(hits or []))
+
+        return self._base.expand_graph_by_triples(
+            group_id=group_id,
+            triples=triples,
+            max_depth=int(graph_max_depth),
+            limit=int(graph_limit),
+            doc_id=doc_id,
+        )
+
+    def native(
+        self,
+        *,
+        group_id: str,
+        query: str,
         top_k: int = 10,
         rerank_enabled: bool = False,
         rerank_provider: Optional[str] = None,
         doc_id: Optional[str] = None,
         doc_time_start: Optional[str] = None,
         doc_time_end: Optional[str] = None,
+    ) -> RetrievalResult:
+        self._require_group_id(group_id)
+        semantic_hits = self._base.search_chunks_vector(
+            group_id=group_id,
+            query=query,
+            top_k=int(top_k),
+            doc_id=doc_id,
+            doc_time_start=doc_time_start,
+            doc_time_end=doc_time_end,
+        )
+        if rerank_enabled and semantic_hits:
+            semantic_hits, _ = rerank_chunk_hits(
+                query=query,
+                hits=semantic_hits,
+                top_k=int(top_k),
+                provider_name=rerank_provider,
+            )
+        return RetrievalResult(
+            keyword_hits=[],
+            semantic_hits=list(semantic_hits or []),
+            graph=None,
+            local_graph=None,
+            global_graph=None,
+        )
+
+    def keyword(
+        self,
+        *,
+        group_id: str,
+        query: str,
+        top_k: int = 10,
+        doc_id: Optional[str] = None,
+        doc_time_start: Optional[str] = None,
+        doc_time_end: Optional[str] = None,
+    ) -> RetrievalResult:
+        self._require_group_id(group_id)
+        keyword_hits = self._base.search_chunks_keyword(
+            group_id=group_id,
+            query=query,
+            top_k=int(top_k),
+            doc_id=doc_id,
+            doc_time_start=doc_time_start,
+            doc_time_end=doc_time_end,
+        )
+        if rerank_enabled and keyword_hits:
+            keyword_hits, _ = rerank_chunk_hits(
+                query=query,
+                hits=keyword_hits,
+                top_k=int(top_k),
+                provider_name=rerank_provider,
+            )
+        return RetrievalResult(
+            keyword_hits=list(keyword_hits or []),
+            semantic_hits=[],
+            graph=None,
+            local_graph=None,
+            global_graph=None,
+        )
+
+    def local(
+        self,
+        *,
+        group_id: str,
+        query: str,
+        top_k: int = 10,
+        doc_id: Optional[str] = None,
         graph_entity_name: Optional[str] = None,
         graph_max_depth: int = 2,
         graph_limit: int = 50,
     ) -> RetrievalResult:
-        """高级检索入口。
-
-        说明：
-        - `modes` 可以直接传基础模式（keyword/semantic/vector/graph/local/global）。
-        - 也可以传高级别名：
-          - native -> semantic
-          - local/global -> 组合 keyword + vector + local/global
-
-        注意：
-        - local/global 的“高/低层拆分”由 BaseRetrievalManager 内部的 split_high_low 负责。
-        """
-
-        normalized = self._normalize_modes(modes)
-
-        expanded: list[str] = []
-        for m in normalized:
-            if m == "native":
-                expanded.append("vector")
-            elif m == "local":
-                expanded.extend(["keyword", "vector", "local"])
-            elif m == "global":
-                expanded.extend(["keyword", "vector", "global"])
-            else:
-                expanded.append(m)
-
-        seen: set[str] = set()
-        unique_expanded: list[str] = []
-        for m in expanded:
-            if m in seen:
-                continue
-            seen.add(m)
-            unique_expanded.append(m)
-
-        return self._base.search(
+        self._require_group_id(group_id)
+        local_graph_res = self._search_local(
             group_id=group_id,
             query=query,
-            modes=unique_expanded,  # type: ignore[arg-type]
             top_k=int(top_k),
-            rerank_enabled=bool(rerank_enabled),
-            rerank_provider=rerank_provider,
             doc_id=doc_id,
-            doc_time_start=doc_time_start,
-            doc_time_end=doc_time_end,
             graph_entity_name=graph_entity_name,
             graph_max_depth=int(graph_max_depth),
             graph_limit=int(graph_limit),
+        )
+        if rerank_enabled and local_graph_res.nodes:
+            nodes, _ = rerank_graph_nodes(
+                query=query,
+                nodes=list(local_graph_res.nodes or []),
+                top_k=None,
+                provider_name=rerank_provider,
+            )
+            local_graph_res = GraphSubgraphResult(nodes=nodes, edges=list(local_graph_res.edges or []))
+        return RetrievalResult(
+            keyword_hits=[],
+            semantic_hits=[],
+            graph=local_graph_res,
+            local_graph=local_graph_res,
+            global_graph=None,
+        )
+
+    def global_(
+        self,
+        *,
+        group_id: str,
+        query: str,
+        top_k: int = 10,
+        doc_id: Optional[str] = None,
+        graph_entity_name: Optional[str] = None,
+        graph_max_depth: int = 2,
+        graph_limit: int = 50,
+    ) -> RetrievalResult:
+        self._require_group_id(group_id)
+        global_graph_res = self._search_global(
+            group_id=group_id,
+            query=query,
+            top_k=int(top_k),
+            doc_id=doc_id,
+            graph_entity_name=graph_entity_name,
+            graph_max_depth=int(graph_max_depth),
+            graph_limit=int(graph_limit),
+        )
+        if rerank_enabled and global_graph_res.nodes:
+            nodes, _ = rerank_graph_nodes(
+                query=query,
+                nodes=list(global_graph_res.nodes or []),
+                top_k=None,
+                provider_name=rerank_provider,
+            )
+            global_graph_res = GraphSubgraphResult(nodes=nodes, edges=list(global_graph_res.edges or []))
+        return RetrievalResult(
+            keyword_hits=[],
+            semantic_hits=[],
+            graph=global_graph_res,
+            local_graph=None,
+            global_graph=global_graph_res,
         )

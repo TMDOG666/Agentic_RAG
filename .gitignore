@@ -3,3 +3,5 @@ __pycache__
 .cursor/skills/.registry/
 .env
 /data/
+test/grag/graph_construction/test_data/
+test/grag/preprocessing/test_data/

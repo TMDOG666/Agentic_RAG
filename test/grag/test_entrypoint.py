@@ -152,7 +152,7 @@ def test_grag_query_wires_retrieval_manager_and_search(monkeypatch: pytest.Monke
             called["rm_collection"] = milvus_collection_name
             called["rm_graph_index_collection"] = milvus_graph_index_collection_name
 
-        def search(self, **kwargs):
+        def keyword(self, **kwargs):
             called["search_kwargs"] = dict(kwargs)
             return _Sentinel("retrieval_result")
 
@@ -163,7 +163,7 @@ def test_grag_query_wires_retrieval_manager_and_search(monkeypatch: pytest.Monke
     out = api.query(
         group_id="g",
         query="q",
-        modes=("keyword", "graph"),
+        mode="keyword",
         top_k=7,
         doc_id="d",
         doc_time_start="2026-01-01T00:00:00+00:00",
@@ -182,7 +182,6 @@ def test_grag_query_wires_retrieval_manager_and_search(monkeypatch: pytest.Monke
     assert called["search_kwargs"] == {
         "group_id": "g",
         "query": "q",
-        "modes": ["keyword", "graph"],
         "top_k": 7,
         "doc_id": "d",
         "doc_time_start": "2026-01-01T00:00:00+00:00",
@@ -210,7 +209,7 @@ def test_grag_default_query_collection_follows_build_options(monkeypatch: pytest
         def __init__(self, *, milvus_collection_name=None, milvus_graph_index_collection_name=None):
             called["rm_collection"] = milvus_collection_name
 
-        def search(self, **kwargs):
+        def native(self, **kwargs):
             return _Sentinel("retrieval_result")
 
     monkeypatch.setattr(ep, "RetrievalManager", FakeRM)
@@ -293,7 +292,7 @@ def test_grag_entrypoint_real_build_and_query(real_doc_texts, pytestconfig) -> N
         keyword_res = api.query(
             group_id=group_id,
             query=keyword_q,
-            modes=("keyword",),
+            mode="keyword",
             top_k=10,
             rerank_enabled=False,
             milvus_collection_name=collection_name,
@@ -305,30 +304,13 @@ def test_grag_entrypoint_real_build_and_query(real_doc_texts, pytestconfig) -> N
             )
         assert len(keyword_res.keyword_hits) > 0
 
-        # 3) semantic
+        # 3) native
         semantic_q = _pick_semantic_query(example_chunk_text)
-        print("\n[Semantic] query=", repr(semantic_q))
-        semantic_res = api.query(
-            group_id=group_id,
-            query=semantic_q,
-            modes=("semantic",),
-            top_k=10,
-            rerank_enabled=False,
-            milvus_collection_name=collection_name,
-        )
-        print("[Semantic] hits=", len(semantic_res.semantic_hits))
-        for i, h in enumerate(semantic_res.semantic_hits[:3]):
-            print(
-                f"  - {i}: doc_id={h.doc_id} chunk_id={h.chunk_id} score={getattr(h, 'score', None)} doc_time={getattr(h, 'doc_time', None)} text={repr((h.text or '')[:120])}"
-            )
-        assert len(semantic_res.semantic_hits) > 0
-
-        # 3.5) native（高级别名 -> vector/semantic）
         print("\n[Native] query=", repr(semantic_q))
         native_res = api.query(
             group_id=group_id,
             query=semantic_q,
-            modes=("native",),
+            mode="native",
             top_k=10,
             rerank_enabled=False,
             milvus_collection_name=collection_name,
@@ -336,37 +318,17 @@ def test_grag_entrypoint_real_build_and_query(real_doc_texts, pytestconfig) -> N
         print("[Native] hits=", len(native_res.semantic_hits))
         assert len(native_res.semantic_hits) > 0
 
-        # 4) graph（如果抽取不到实体则跳过）
+        # 4) local / global
         entity_name = _pick_graph_entity_name(group_id=group_id, doc_id=first_doc_id)
         if not entity_name:
-            pytest.skip("No entity extracted for graph retrieval in this run")
-
-        print("\n[Graph] entity_name=", repr(entity_name))
-        graph_res = api.query(
-            group_id=group_id,
-            query=entity_name,
-            modes=("graph",),
-            graph_entity_name=entity_name,
-            graph_max_depth=2,
-            graph_limit=50,
-            rerank_enabled=False,
-            milvus_collection_name=collection_name,
-        )
-        assert graph_res.graph is not None
-        print("[Graph] nodes=", len(graph_res.graph.nodes), "edges=", len(graph_res.graph.edges))
-        for i, n in enumerate(graph_res.graph.nodes[:5]):
-            print(
-                f"  - {i}: name={repr(n.get('name'))} type={repr(n.get('type'))} desc={repr((n.get('description') or '')[:120])}"
-            )
-
-        # 5) local / global（高级模式：自动组合 keyword + vector + local/global）
+            pytest.skip("No entity extracted for local/global retrieval in this run")
         highlow = f"{entity_name}>{entity_name}"
 
         print("\n[Local] highlow=", repr(highlow))
         local_res = api.query(
             group_id=group_id,
             query=semantic_q,
-            modes=("local",),
+            mode="local",
             graph_entity_name=highlow,
             graph_max_depth=2,
             graph_limit=50,
@@ -380,7 +342,7 @@ def test_grag_entrypoint_real_build_and_query(real_doc_texts, pytestconfig) -> N
         global_res = api.query(
             group_id=group_id,
             query=semantic_q,
-            modes=("global",),
+            mode="global",
             graph_entity_name=highlow,
             graph_max_depth=2,
             graph_limit=50,

@@ -4,7 +4,6 @@ from .advanced_retrieval_manager import AdvancedRetrievalManager, AdvancedRetrie
 
 from .base_retriever.base_retrieval_manager import (
     BaseRetrievalManager,
-    RetrievalMode,
     RetrievalResult,
 )
 
@@ -17,7 +16,6 @@ __all__ = [
     "AdvancedRetrievalManager",
     "BaseRetrievalManager",
     "RetrievalResult",
-    "RetrievalMode",
     "KeywordRetriever",
     "KeywordChunkHit",
     "SemanticRetriever",

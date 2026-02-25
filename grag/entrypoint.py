@@ -155,7 +155,7 @@ class GRAG:
         *,
         group_id: str,
         query: str,
-        modes: Sequence[str] = ("semantic",),
+        mode: str = "native",
         top_k: int = 20,
         doc_id: Optional[str] = None,
         doc_time_start: Optional[str] = None,
@@ -168,7 +168,7 @@ class GRAG:
         milvus_collection_name: Optional[str] = None,
         milvus_graph_index_collection_name: Optional[str] = None,
     ) -> RetrievalResult:
-        """查询检索入口（RetrievalManager.search 的 Facade）。
+        """查询检索入口（RetrievalManager 的 Facade）。
 
         Args:
             group_id:
@@ -177,18 +177,14 @@ class GRAG:
             query:
                 用户查询。
 
-            modes:
-                检索模式列表。
+            mode:
+                检索模式。
 
-                基础模式：
-                - keyword：Postgres ILIKE 文本匹配
-                - semantic：embedding + Milvus 向量检索 + Postgres 回填 chunk 文本
-                - vector/native：semantic 的别名（便于对齐“向量检索(native)”说法）
-                - graph：Neo4j 子图扩展（以 entity_name/alias 为入口）
-
-                LightRAG 风格模式：
-                - local：低层关键词（规则拆分的 low）驱动的 graph 检索
-                - global：高层关键词（规则拆分的 high）驱动的 graph 检索
+                支持：
+                - native：向量检索 chunk（embedding + Milvus）
+                - keyword：关键字检索 chunk（Postgres ILIKE 等）
+                - local：低层关键词驱动的子图检索（entity 向量召回 -> 扩图）
+                - global：高层关键词驱动的子图检索（relation 向量召回 -> 扩图）
 
             top_k:
                 返回条数（各检索模式会以自己的方式使用 top_k）。
@@ -216,14 +212,7 @@ class GRAG:
 
         get_config_manager().initialize()
 
-        normalized_modes: list[str] = []
-        for m in (modes or []):
-            s = str(m).strip().lower()
-            if not s:
-                continue
-            if s in {"native", "vector"}:
-                s = "vector"
-            normalized_modes.append(s)
+        normalized_mode = str(mode or "").strip().lower() or "native"
 
         collection = milvus_collection_name
         if collection is None:
@@ -237,17 +226,54 @@ class GRAG:
             milvus_collection_name=collection,
             milvus_graph_index_collection_name=graph_index_collection,
         )
-        return rm.search(
-            group_id=group_id,
-            query=query,
-            modes=normalized_modes,
-            top_k=int(top_k),
-            doc_id=doc_id,
-            doc_time_start=doc_time_start,
-            doc_time_end=doc_time_end,
-            rerank_enabled=rerank_enabled,
-            rerank_provider=rerank_provider,
-            graph_entity_name=graph_entity_name,
-            graph_max_depth=int(graph_max_depth),
-            graph_limit=int(graph_limit),
-        )
+        if normalized_mode == "native":
+            return rm.native(
+                group_id=group_id,
+                query=query,
+                top_k=int(top_k),
+                doc_id=doc_id,
+                doc_time_start=doc_time_start,
+                doc_time_end=doc_time_end,
+                rerank_enabled=bool(rerank_enabled),
+                rerank_provider=rerank_provider,
+            )
+
+        if normalized_mode == "keyword":
+            return rm.keyword(
+                group_id=group_id,
+                query=query,
+                top_k=int(top_k),
+                doc_id=doc_id,
+                doc_time_start=doc_time_start,
+                doc_time_end=doc_time_end,
+                rerank_enabled=bool(rerank_enabled),
+                rerank_provider=rerank_provider,
+            )
+
+        if normalized_mode == "local":
+            return rm.local(
+                group_id=group_id,
+                query=query,
+                top_k=int(top_k),
+                doc_id=doc_id,
+                graph_entity_name=graph_entity_name,
+                graph_max_depth=int(graph_max_depth),
+                graph_limit=int(graph_limit),
+                rerank_enabled=bool(rerank_enabled),
+                rerank_provider=rerank_provider,
+            )
+
+        if normalized_mode == "global":
+            return rm.global_(
+                group_id=group_id,
+                query=query,
+                top_k=int(top_k),
+                doc_id=doc_id,
+                graph_entity_name=graph_entity_name,
+                graph_max_depth=int(graph_max_depth),
+                graph_limit=int(graph_limit),
+                rerank_enabled=bool(rerank_enabled),
+                rerank_provider=rerank_provider,
+            )
+
+        raise ValueError(f"Unsupported mode: {normalized_mode!r}")

@@ -208,10 +208,9 @@ def test_full_retrieval_with_real_db(real_doc_texts, pytestconfig) -> None:
 
         keyword_q = _pick_keyword_query(example_chunk_text)
         print("\n[Keyword] query=", repr(keyword_q))
-        keyword_res = rm.search(
+        keyword_res = rm.keyword(
             group_id=group_id,
             query=keyword_q,
-            modes=["keyword"],
             top_k=10,
             rerank_enabled=False,
         )
@@ -227,10 +226,9 @@ def test_full_retrieval_with_real_db(real_doc_texts, pytestconfig) -> None:
 
         semantic_q = _pick_semantic_query(example_chunk_text)
         print("\n[Semantic] query=", repr(semantic_q))
-        semantic_res = rm.search(
+        semantic_res = rm.native(
             group_id=group_id,
             query=semantic_q,
-            modes=["semantic"],
             top_k=10,
             rerank_enabled=False,
         )
@@ -244,10 +242,9 @@ def test_full_retrieval_with_real_db(real_doc_texts, pytestconfig) -> None:
         assert all(h.group_id == group_id for h in semantic_res.semantic_hits)
 
         print("\n[Native] query=", repr(semantic_q))
-        native_res = rm.search(
+        native_res = rm.native(
             group_id=group_id,
             query=semantic_q,
-            modes=["native"],
             top_k=10,
             rerank_enabled=False,
         )
@@ -258,32 +255,12 @@ def test_full_retrieval_with_real_db(real_doc_texts, pytestconfig) -> None:
 
         entity_name = _pick_graph_entity_name(group_id=group_id, doc_id=first_doc_id)
         if entity_name:
-            print("\n[Graph] entity_name=", repr(entity_name))
-            graph_res = rm.search(
-                group_id=group_id,
-                query=entity_name,
-                modes=["graph"],
-                graph_entity_name=entity_name,
-                graph_max_depth=2,
-                graph_limit=50,
-            )
-            assert graph_res.graph is not None
-            print("[Graph] nodes=", len(graph_res.graph.nodes), "edges=", len(graph_res.graph.edges))
-            for i, n in enumerate(graph_res.graph.nodes[:5]):
-                print(
-                    f"  - {i}: name={repr(n.get('name'))} type={repr(n.get('type'))} desc={repr((n.get('description') or '')[:120])}"
-                )
-            assert graph_res.graph is not None
-            assert isinstance(graph_res.graph.nodes, list)
-            assert isinstance(graph_res.graph.edges, list)
-
             highlow = f"{entity_name}>{entity_name}"
 
             print("\n[Local] highlow=", repr(highlow))
-            local_res = rm.search(
+            local_res = rm.local(
                 group_id=group_id,
                 query=semantic_q,
-                modes=["local"],
                 graph_entity_name=highlow,
                 graph_max_depth=2,
                 graph_limit=50,
@@ -294,10 +271,9 @@ def test_full_retrieval_with_real_db(real_doc_texts, pytestconfig) -> None:
             assert isinstance(local_res.local_graph.nodes, list)
 
             print("\n[Global] highlow=", repr(highlow))
-            global_res = rm.search(
+            global_res = rm.global_(
                 group_id=group_id,
                 query=semantic_q,
-                modes=["global"],
                 graph_entity_name=highlow,
                 graph_max_depth=2,
                 graph_limit=50,
@@ -307,7 +283,7 @@ def test_full_retrieval_with_real_db(real_doc_texts, pytestconfig) -> None:
             print("[Global] nodes=", len(global_res.global_graph.nodes), "edges=", len(global_res.global_graph.edges))
             assert isinstance(global_res.global_graph.nodes, list)
         else:
-            pytest.skip("No entity extracted for graph retrieval in this run")
+            pytest.skip("No entity extracted for local/global retrieval in this run")
 
     finally:
         if pause_s > 0:

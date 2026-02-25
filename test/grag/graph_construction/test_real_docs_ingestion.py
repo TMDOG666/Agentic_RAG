@@ -244,11 +244,11 @@ def test_real_docs_ingestion_end_to_end(real_doc_texts, pytestconfig) -> None:
             assert rec.get("doc_time") == doc_time
 
     finally:
-        pause_seconds = int(request.config.getoption("--pause"))
+        pause_seconds = int(pytestconfig.getoption("pause") or 0)
         if pause_seconds > 0:
             time.sleep(pause_seconds)
 
-        if bool(request.config.getoption("--no-cleanup")):
+        if bool(pytestconfig.getoption("no_cleanup")):
             return
 
         if all_chunk_ids:

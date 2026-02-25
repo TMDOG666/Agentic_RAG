@@ -78,7 +78,7 @@ def test_query_only_retrieval(pytestconfig) -> None:
 
     if keyword_q:
         print("\n[Keyword] query=", repr(keyword_q))
-        res = rm.search(group_id=group_id, query=keyword_q, modes=["keyword"], top_k=10, rerank_enabled=False)
+        res = rm.keyword(group_id=group_id, query=keyword_q, top_k=10, rerank_enabled=False)
         print("[Keyword] hits=", len(res.keyword_hits))
         for i, h in enumerate(res.keyword_hits[:5]):
             print(f"  - {i}: doc_id={h.doc_id} chunk_id={h.chunk_id} index={h.index} text={repr((h.text or '')[:160])}")
@@ -93,7 +93,7 @@ def test_query_only_retrieval(pytestconfig) -> None:
                 "If you copied a numeric id from UI, pass the actual collection name instead."
             )
         print("\n[Semantic] query=", repr(semantic_q))
-        res = rm.search(group_id=group_id, query=semantic_q, modes=["semantic"], top_k=10, rerank_enabled=False)
+        res = rm.native(group_id=group_id, query=semantic_q, top_k=10, rerank_enabled=False)
         print("[Semantic] hits=", len(res.semantic_hits))
         for i, h in enumerate(res.semantic_hits[:5]):
             print(
@@ -112,7 +112,7 @@ def test_query_only_retrieval(pytestconfig) -> None:
                 "If you copied a numeric id from UI, pass the actual collection name instead."
             )
         print("\n[Native] query=", repr(native_q))
-        res = rm.search(group_id=group_id, query=native_q, modes=["native"], top_k=10, rerank_enabled=False)
+        res = rm.native(group_id=group_id, query=native_q, top_k=10, rerank_enabled=False)
         print("[Native] semantic_hits=", len(res.semantic_hits))
         for i, h in enumerate(res.semantic_hits[:5]):
             print(
@@ -123,20 +123,19 @@ def test_query_only_retrieval(pytestconfig) -> None:
 
     if graph_entity:
         print("\n[Graph] entity_name=", repr(graph_entity))
-        res = rm.search(
+        res = rm.local(
             group_id=group_id,
             query=graph_entity,
-            modes=["graph"],
             graph_entity_name=graph_entity,
             graph_max_depth=2,
             graph_limit=50,
             rerank_enabled=False,
         )
-        if res.graph is None:
-            print("[Graph] graph=None")
+        if res.local_graph is None:
+            print("[Graph] local_graph=None")
         else:
-            print("[Graph] nodes=", len(res.graph.nodes), "edges=", len(res.graph.edges))
-            for i, n in enumerate(res.graph.nodes[:8]):
+            print("[Graph] nodes=", len(res.local_graph.nodes), "edges=", len(res.local_graph.edges))
+            for i, n in enumerate(res.local_graph.nodes[:8]):
                 print(
                     f"  - {i}: name={repr(n.get('name'))} type={repr(n.get('type'))} desc={repr((n.get('description') or '')[:160])}"
                 )
@@ -146,10 +145,9 @@ def test_query_only_retrieval(pytestconfig) -> None:
         if not graph_entity:
             pytest.skip("Missing --graph-entity for local graph retrieval")
         print("\n[Local] query=", repr(local_q), "graph_entity=", repr(graph_entity))
-        res = rm.search(
+        res = rm.local(
             group_id=group_id,
             query=local_q,
-            modes=["local"],
             graph_entity_name=graph_entity,
             graph_max_depth=2,
             graph_limit=50,
@@ -165,10 +163,9 @@ def test_query_only_retrieval(pytestconfig) -> None:
         if not graph_entity:
             pytest.skip("Missing --graph-entity for global graph retrieval")
         print("\n[Global] query=", repr(global_q), "graph_entity=", repr(graph_entity))
-        res = rm.search(
+        res = rm.global_(
             group_id=group_id,
             query=global_q,
-            modes=["global"],
             graph_entity_name=graph_entity,
             graph_max_depth=2,
             graph_limit=50,

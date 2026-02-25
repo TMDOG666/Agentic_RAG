@@ -90,12 +90,12 @@ def test_full_pipeline_parametric(real_doc_texts, pytestconfig) -> None:
     目标：用一条测试用例覆盖以下操作（可按参数选择执行哪些步骤）：
     - 可选：入库（Postgres + Milvus chunk collection + Milvus graph_index + Neo4j）
     - 可选：清理（按本次 run 创建的 doc/chunk 删除）
-    - 可选：检索（keyword/semantic/native/graph/local/global）
+    - 可选：检索（keyword/native/local/global）
 
     CLI 参数（见 test/conftest.py）：
     - --pipeline-ingest
     - --pipeline-cleanup（强制清理，覆盖 --no-cleanup）
-    - --pipeline-modes=keyword,semantic,native,graph,local,global
+    - --pipeline-modes=keyword,native,local,global
     - --pipeline-docs=2
     - --pipeline-graph-index-collection（默认 grag_graph_index）
 
@@ -196,10 +196,9 @@ def test_full_pipeline_parametric(real_doc_texts, pytestconfig) -> None:
         for m in modes:
             if m == "keyword":
                 print("\n[Keyword] query=", repr(keyword_q))
-                res = rm.search(
+                res = rm.keyword(
                     group_id=group_id,
                     query=keyword_q,
-                    modes=["keyword"],
                     top_k=10,
                     rerank_enabled=False,
                 )
@@ -208,26 +207,11 @@ def test_full_pipeline_parametric(real_doc_texts, pytestconfig) -> None:
                 assert len(res.keyword_hits) > 0
                 _maybe_print_json(title="Keyword", payload=res, enabled=print_enabled)
 
-            elif m == "semantic":
-                print("\n[Semantic] query=", repr(semantic_q))
-                res = rm.search(
-                    group_id=group_id,
-                    query=semantic_q,
-                    modes=["semantic"],
-                    top_k=10,
-                    rerank_enabled=False,
-                )
-                print("[Semantic] hits=", len(res.semantic_hits))
-                assert isinstance(res.semantic_hits, list)
-                assert len(res.semantic_hits) > 0
-                _maybe_print_json(title="Semantic", payload=res, enabled=print_enabled)
-
             elif m == "native":
                 print("\n[Native] query=", repr(semantic_q))
-                res = rm.search(
+                res = rm.native(
                     group_id=group_id,
                     query=semantic_q,
-                    modes=["native"],
                     top_k=10,
                     rerank_enabled=False,
                 )
@@ -236,33 +220,15 @@ def test_full_pipeline_parametric(real_doc_texts, pytestconfig) -> None:
                 assert len(res.semantic_hits) > 0
                 _maybe_print_json(title="Native", payload=res, enabled=print_enabled)
 
-            elif m == "graph":
-                if not entity_name:
-                    pytest.skip("No entity extracted for graph retrieval in this run")
-                print("\n[Graph] entity_name=", repr(entity_name))
-                res = rm.search(
-                    group_id=group_id,
-                    query=entity_name,
-                    modes=["graph"],
-                    graph_entity_name=entity_name,
-                    graph_max_depth=2,
-                    graph_limit=50,
-                    rerank_enabled=False,
-                )
-                assert res.graph is not None
-                print("[Graph] nodes=", len(res.graph.nodes), "edges=", len(res.graph.edges))
-                _maybe_print_json(title="Graph", payload=res, enabled=print_enabled)
-
             elif m == "local":
                 # local/global 使用 high>low 协议：此处沿用 existing tests 的简化用法
                 if not entity_name:
                     pytest.skip("No entity extracted for local retrieval in this run")
                 highlow = f"{entity_name}>{entity_name}"
                 print("\n[Local] highlow=", repr(highlow), "query=", repr(semantic_q))
-                res = rm.search(
+                res = rm.local(
                     group_id=group_id,
                     query=semantic_q,
-                    modes=["local"],
                     graph_entity_name=highlow,
                     graph_max_depth=2,
                     graph_limit=50,
@@ -277,10 +243,9 @@ def test_full_pipeline_parametric(real_doc_texts, pytestconfig) -> None:
                     pytest.skip("No entity extracted for global retrieval in this run")
                 highlow = f"{entity_name}>{entity_name}"
                 print("\n[Global] highlow=", repr(highlow), "query=", repr(semantic_q))
-                res = rm.search(
+                res = rm.global_(
                     group_id=group_id,
                     query=semantic_q,
-                    modes=["global"],
                     graph_entity_name=highlow,
                     graph_max_depth=2,
                     graph_limit=50,

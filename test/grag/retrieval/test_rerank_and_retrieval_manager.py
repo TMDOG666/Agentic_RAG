@@ -88,11 +88,12 @@ class TestRerankChunkHits:
 
 class TestRetrievalManagerRerank:
     def test_retrieval_manager_reranks_keyword_hits(self, monkeypatch: pytest.MonkeyPatch):
-        from grag.retrieval import BaseRetrievalManager, RetrievalResult, KeywordChunkHit
-        import grag.retrieval.base_retriever.base_retrieval_manager as rm_mod
+        from grag.retrieval import RetrievalManager, RetrievalResult, KeywordChunkHit
+        import grag.retrieval.advanced_retrieval_manager as rm_mod
+        from grag.retrieval.base_retriever.base_retrieval_manager import BaseRetrievalManager
 
-        # 1) 构造一个不触发真实 DB 的 BaseRetrievalManager 实例
-        rm = BaseRetrievalManager.__new__(BaseRetrievalManager)
+        rm = RetrievalManager.__new__(RetrievalManager)
+        rm._base = BaseRetrievalManager.__new__(BaseRetrievalManager)
 
         class FakeKeyword:
             def search(self, **kwargs):
@@ -109,9 +110,9 @@ class TestRetrievalManagerRerank:
             def search(self, **kwargs):
                 return None
 
-        rm._keyword = FakeKeyword()
-        rm._semantic = FakeSemantic()
-        rm._graph = FakeGraph()
+        rm._base._keyword = FakeKeyword()
+        rm._base._semantic = FakeSemantic()
+        rm._base._graph = FakeGraph()
 
         # 2) monkeypatch rerank_chunk_hits：直接把 hits 反转
         def fake_rerank_chunk_hits(*, query, hits, top_k=None, provider_name=None):
@@ -119,10 +120,9 @@ class TestRetrievalManagerRerank:
 
         monkeypatch.setattr(rm_mod, "rerank_chunk_hits", fake_rerank_chunk_hits)
 
-        res = rm.search(
+        res = rm.keyword(
             group_id="g",
             query="q",
-            modes=["keyword"],
             top_k=10,
             rerank_enabled=True,
             rerank_provider=None,
@@ -132,21 +132,20 @@ class TestRetrievalManagerRerank:
         assert [h.chunk_id for h in res.keyword_hits] == ["2", "1"]
 
     def test_group_id_required(self):
-        from grag.retrieval import BaseRetrievalManager
+        from grag.retrieval import RetrievalManager
 
-        rm = BaseRetrievalManager.__new__(BaseRetrievalManager)
-        rm._keyword = object()
-        rm._semantic = object()
-        rm._graph = object()
+        rm = RetrievalManager.__new__(RetrievalManager)
 
         with pytest.raises(ValueError):
-            rm.search(group_id="", query="q", modes=["keyword"])  # type: ignore[arg-type]
+            rm.keyword(group_id="", query="q")  # type: ignore[arg-type]
 
     def test_retrieval_manager_reranks_graph_nodes(self, monkeypatch: pytest.MonkeyPatch):
-        from grag.retrieval import BaseRetrievalManager, RetrievalResult, GraphSubgraphResult
-        import grag.retrieval.base_retriever.base_retrieval_manager as rm_mod
+        from grag.retrieval import RetrievalManager, RetrievalResult, GraphSubgraphResult
+        import grag.retrieval.advanced_retrieval_manager as rm_mod
+        from grag.retrieval.base_retriever.base_retrieval_manager import BaseRetrievalManager
 
-        rm = BaseRetrievalManager.__new__(BaseRetrievalManager)
+        rm = RetrievalManager.__new__(RetrievalManager)
+        rm._base = BaseRetrievalManager.__new__(BaseRetrievalManager)
 
         class FakeKeyword:
             def search(self, **kwargs):
@@ -166,19 +165,18 @@ class TestRetrievalManagerRerank:
                     edges=[{"type": "REL"}],
                 )
 
-        rm._keyword = FakeKeyword()
-        rm._semantic = FakeSemantic()
-        rm._graph = FakeGraph()
+        rm._base._keyword = FakeKeyword()
+        rm._base._semantic = FakeSemantic()
+        rm._base._graph = FakeGraph()
 
         def fake_rerank_graph_nodes(*, query, nodes, top_k=None, provider_name=None):
             return (list(reversed(nodes)), None)
 
         monkeypatch.setattr(rm_mod, "rerank_graph_nodes", fake_rerank_graph_nodes)
 
-        res = rm.search(
+        res = rm.global_(
             group_id="g",
             query="q",
-            modes=["graph"],
             top_k=10,
             rerank_enabled=True,
         )
