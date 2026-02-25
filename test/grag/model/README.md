@@ -18,7 +18,6 @@ conda activate langchain
 python test/grag/model/test_llm_client.py
 python test/grag/model/test_embedding_client.py
 python test/grag/model/test_reranker_client.py
-python test/grag/model/test_model_manager.py
 
 # 运行全部 Model 测试
 python test/grag/model/run_all_tests.py
@@ -39,9 +38,8 @@ python run_all_tests.py
 | `test_embedding_client.py` | EmbeddingClient 初始化、get_embeddings、维度、refresh、全局函数 |
 | `test_reranker_client.py` | RerankerClient 初始化、is_available、rerank 返回格式、全局函数 |
 | `test_vision_client.py` | VisionClient 初始化、视觉模型配置校验、客户端懒加载、全局函数 |
-| `test_model_manager.py` | ModelManager 初始化、各 get_*_client、model_info/status、refresh/cleanup、全局函数 |
-| `run_all_tests.py` | 依次执行上述 5 个模块的 run_tests() 并汇总结果 |
+| `run_all_tests.py` | 依次执行上述 4 个模块的 run_tests() 并汇总结果 |
 
 ## 与 Config 的联动
 
-所有测试在 `setup_method` 或 `run_tests()` 前会调用 `get_config_manager().initialize()`，确保从 `config/grag_config.yaml` 加载配置后再创建 LLM/Embedding/Reranker 客户端与 ModelManager，从而验证「配置层 + model 层」的联动。
+所有测试在 `setup_method` 或 `run_tests()` 前会调用 `get_config_manager().initialize()`，确保从 `config/grag_config.yaml` 加载配置后再创建 LLM/Embedding/Reranker/Vision 客户端，从而验证「配置层 + model 层」的联动。

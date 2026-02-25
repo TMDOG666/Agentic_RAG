@@ -12,8 +12,7 @@ import pytest
 
 from grag.config import get_config_manager
 from grag.data_client import get_data_manager
-from grag.graph_construction.graph_builder import GraphBuilder
-from grag.retrieval import RetrievalManager
+from grag.entrypoint import BuildOptions, GRAG, QueryOptions
 from grag.storage.storage_impl import DataClientGraphStorage
 
 from test.grag.retrieval.test_full_retrieval_integration import (
@@ -146,7 +145,18 @@ def test_full_pipeline_parametric(real_doc_texts, pytestconfig) -> None:
         milvus_graph_index_collection_name=graph_index_collection,
         milvus_upsert_strategy="delete_then_insert",
     )
-    builder = GraphBuilder(storage=storage)
+
+    api = GRAG(
+        build_options=BuildOptions(
+            milvus_collection_name=collection_name,
+            milvus_upsert_strategy="delete_then_insert",
+            milvus_graph_index_collection_name=graph_index_collection,
+        ),
+        query_options=QueryOptions(
+            milvus_collection_name=collection_name,
+            milvus_graph_index_collection_name=graph_index_collection,
+        ),
+    )
 
     created_doc_ids: list[str] = []
     created_chunk_ids: list[str] = []
@@ -164,7 +174,7 @@ def test_full_pipeline_parametric(real_doc_texts, pytestconfig) -> None:
             doc_time = datetime.now(timezone.utc).isoformat()
             snippet = (text or "")[:6000]
 
-            result = builder.build_and_save(
+            result = api.build_kg(
                 text=snippet,
                 doc_time=doc_time,
                 doc_name=doc_name,
@@ -182,11 +192,6 @@ def test_full_pipeline_parametric(real_doc_texts, pytestconfig) -> None:
         assert first_doc_id is not None
 
         # 2) 检索
-        rm = RetrievalManager(
-            milvus_collection_name=collection_name,
-            milvus_graph_index_collection_name=graph_index_collection,
-        )
-
         keyword_q = _pick_keyword_query(example_chunk_text)
         semantic_q = _pick_semantic_query(example_chunk_text)
 
@@ -196,9 +201,10 @@ def test_full_pipeline_parametric(real_doc_texts, pytestconfig) -> None:
         for m in modes:
             if m == "keyword":
                 print("\n[Keyword] query=", repr(keyword_q))
-                res = rm.keyword(
+                res = api.query(
                     group_id=group_id,
                     query=keyword_q,
+                    mode="keyword",
                     top_k=10,
                     rerank_enabled=False,
                 )
@@ -209,9 +215,10 @@ def test_full_pipeline_parametric(real_doc_texts, pytestconfig) -> None:
 
             elif m == "native":
                 print("\n[Native] query=", repr(semantic_q))
-                res = rm.native(
+                res = api.query(
                     group_id=group_id,
                     query=semantic_q,
+                    mode="native",
                     top_k=10,
                     rerank_enabled=False,
                 )
@@ -226,10 +233,11 @@ def test_full_pipeline_parametric(real_doc_texts, pytestconfig) -> None:
                     pytest.skip("No entity extracted for local retrieval in this run")
                 highlow = f"{entity_name}>{entity_name}"
                 print("\n[Local] highlow=", repr(highlow), "query=", repr(semantic_q))
-                res = rm.local(
+                res = api.query(
                     group_id=group_id,
                     query=semantic_q,
                     graph_entity_name=highlow,
+                    mode="local",
                     graph_max_depth=2,
                     graph_limit=50,
                     rerank_enabled=False,
@@ -243,10 +251,11 @@ def test_full_pipeline_parametric(real_doc_texts, pytestconfig) -> None:
                     pytest.skip("No entity extracted for global retrieval in this run")
                 highlow = f"{entity_name}>{entity_name}"
                 print("\n[Global] highlow=", repr(highlow), "query=", repr(semantic_q))
-                res = rm.global_(
+                res = api.query(
                     group_id=group_id,
                     query=semantic_q,
                     graph_entity_name=highlow,
+                    mode="global",
                     graph_max_depth=2,
                     graph_limit=50,
                     rerank_enabled=False,

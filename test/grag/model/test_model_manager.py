@@ -1,19 +1,12 @@
-"""测试模型管理器 (ModelManager)"""
+"""测试模型管理器 (ModelManager)
 
-from grag.config import get_config_manager
-from grag.model.model_manager import (
-    ModelManager,
-    get_model_manager,
-    initialize_models,
-    get_llm_client,
-    get_embedding_client,
-    get_reranker_client,
-    get_model_info,
-    get_model_status,
-)
-from grag.model.llm_client import LLMClient
-from grag.model.embedding_client import EmbeddingClient
-from grag.model.reranker_client import RerankerClient
+NOTE:
+ModelManager has been removed (plan A). This test module is intentionally skipped.
+"""
+
+import pytest
+
+pytest.skip("ModelManager has been removed; skip legacy ModelManager tests", allow_module_level=True)
 
 
 def _ensure_config():

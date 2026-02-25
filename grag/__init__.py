@@ -24,4 +24,17 @@ GraphRAG（Graph Retrieval-Augmented Generation）是一个基于知识图谱的
 __version__ = "0.1.0"
 __author__ = "GraphRAG Team"
 
-from .entrypoint import BuildOptions, GRAG, QueryOptions
+
+def __getattr__(name: str):
+    if name in {"GRAG", "BuildOptions", "QueryOptions"}:
+        from .entrypoint import BuildOptions, GRAG, QueryOptions
+
+        return {"GRAG": GRAG, "BuildOptions": BuildOptions, "QueryOptions": QueryOptions}[name]
+    raise AttributeError(name)
+
+
+__all__ = [
+    "GRAG",
+    "BuildOptions",
+    "QueryOptions",
+]

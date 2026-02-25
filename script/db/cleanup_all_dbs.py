@@ -246,9 +246,9 @@ def main() -> int:
         args.milvus = True
 
     # Initialize config before creating clients.
-    from grag.config import initialize_config
+    from grag.config import get_config_manager
 
-    initialize_config()
+    get_config_manager().initialize()
 
     plan = CleanupPlan(postgres_deleted=False, neo4j_deleted=False, milvus_deleted=False)
 
