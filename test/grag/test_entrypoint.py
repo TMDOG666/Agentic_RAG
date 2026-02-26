@@ -160,19 +160,17 @@ def test_grag_query_wires_retrieval_manager_and_search(monkeypatch: pytest.Monke
     monkeypatch.setattr(ep, "RetrievalManager", FakeRM)
 
     api = ep.GRAG(query_options=ep.QueryOptions(milvus_collection_name="cQ"))
-    out = api.query(
+    out = api.keyword(
         group_id="g",
         query="q",
-        mode="keyword",
         top_k=7,
         doc_id="d",
         doc_time_start="2026-01-01T00:00:00+00:00",
         doc_time_end="2026-02-01T00:00:00+00:00",
         rerank_enabled=False,
         rerank_provider="p",
-        graph_entity_name="E",
-        graph_max_depth=3,
-        graph_limit=99,
+        milvus_collection_name=None,
+        milvus_graph_index_collection_name=None,
     )
 
     assert out == _Sentinel("retrieval_result")
@@ -188,9 +186,6 @@ def test_grag_query_wires_retrieval_manager_and_search(monkeypatch: pytest.Monke
         "doc_time_end": "2026-02-01T00:00:00+00:00",
         "rerank_enabled": False,
         "rerank_provider": "p",
-        "graph_entity_name": "E",
-        "graph_max_depth": 3,
-        "graph_limit": 99,
     }
 
 
@@ -215,7 +210,7 @@ def test_grag_default_query_collection_follows_build_options(monkeypatch: pytest
     monkeypatch.setattr(ep, "RetrievalManager", FakeRM)
 
     api = ep.GRAG(build_options=ep.BuildOptions(milvus_collection_name="c0"))
-    api.query(group_id="g", query="q")
+    api.native(group_id="g", query="q")
 
     assert called["rm_collection"] == "c0"
 
@@ -289,10 +284,9 @@ def test_grag_entrypoint_real_build_and_query(real_doc_texts, pytestconfig) -> N
         # 2) keyword
         keyword_q = _pick_keyword_query(example_chunk_text)
         print("\n[Keyword] query=", repr(keyword_q))
-        keyword_res = api.query(
+        keyword_res = api.keyword(
             group_id=group_id,
             query=keyword_q,
-            mode="keyword",
             top_k=10,
             rerank_enabled=False,
             milvus_collection_name=collection_name,
@@ -307,10 +301,9 @@ def test_grag_entrypoint_real_build_and_query(real_doc_texts, pytestconfig) -> N
         # 3) native
         semantic_q = _pick_semantic_query(example_chunk_text)
         print("\n[Native] query=", repr(semantic_q))
-        native_res = api.query(
+        native_res = api.native(
             group_id=group_id,
             query=semantic_q,
-            mode="native",
             top_k=10,
             rerank_enabled=False,
             milvus_collection_name=collection_name,
@@ -325,10 +318,9 @@ def test_grag_entrypoint_real_build_and_query(real_doc_texts, pytestconfig) -> N
         highlow = f"{entity_name}>{entity_name}"
 
         print("\n[Local] highlow=", repr(highlow))
-        local_res = api.query(
+        local_res = api.local(
             group_id=group_id,
             query=semantic_q,
-            mode="local",
             graph_entity_name=highlow,
             graph_max_depth=2,
             graph_limit=50,
@@ -339,10 +331,9 @@ def test_grag_entrypoint_real_build_and_query(real_doc_texts, pytestconfig) -> N
         print("[Local] nodes=", len(local_res.local_graph.nodes), "edges=", len(local_res.local_graph.edges))
 
         print("\n[Global] highlow=", repr(highlow))
-        global_res = api.query(
+        global_res = api.global_(
             group_id=group_id,
             query=semantic_q,
-            mode="global",
             graph_entity_name=highlow,
             graph_max_depth=2,
             graph_limit=50,

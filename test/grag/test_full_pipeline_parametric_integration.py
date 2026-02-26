@@ -201,10 +201,9 @@ def test_full_pipeline_parametric(real_doc_texts, pytestconfig) -> None:
         for m in modes:
             if m == "keyword":
                 print("\n[Keyword] query=", repr(keyword_q))
-                res = api.query(
+                res = api.keyword(
                     group_id=group_id,
                     query=keyword_q,
-                    mode="keyword",
                     top_k=10,
                     rerank_enabled=False,
                 )
@@ -215,10 +214,9 @@ def test_full_pipeline_parametric(real_doc_texts, pytestconfig) -> None:
 
             elif m == "native":
                 print("\n[Native] query=", repr(semantic_q))
-                res = api.query(
+                res = api.native(
                     group_id=group_id,
                     query=semantic_q,
-                    mode="native",
                     top_k=10,
                     rerank_enabled=False,
                 )
@@ -233,11 +231,10 @@ def test_full_pipeline_parametric(real_doc_texts, pytestconfig) -> None:
                     pytest.skip("No entity extracted for local retrieval in this run")
                 highlow = f"{entity_name}>{entity_name}"
                 print("\n[Local] highlow=", repr(highlow), "query=", repr(semantic_q))
-                res = api.query(
+                res = api.local(
                     group_id=group_id,
                     query=semantic_q,
                     graph_entity_name=highlow,
-                    mode="local",
                     graph_max_depth=2,
                     graph_limit=50,
                     rerank_enabled=False,
@@ -251,11 +248,10 @@ def test_full_pipeline_parametric(real_doc_texts, pytestconfig) -> None:
                     pytest.skip("No entity extracted for global retrieval in this run")
                 highlow = f"{entity_name}>{entity_name}"
                 print("\n[Global] highlow=", repr(highlow), "query=", repr(semantic_q))
-                res = api.query(
+                res = api.global_(
                     group_id=group_id,
                     query=semantic_q,
                     graph_entity_name=highlow,
-                    mode="global",
                     graph_max_depth=2,
                     graph_limit=50,
                     rerank_enabled=False,

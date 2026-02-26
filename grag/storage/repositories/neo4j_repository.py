@@ -253,6 +253,8 @@ class Neo4jGraphRepository:
                         "doc_time": n.get("doc_time"),
                     }
             for r in p.relationships:
+                start = getattr(r, "start_node", None)
+                end = getattr(r, "end_node", None)
                 edges.append(
                     {
                         "type": r.get("type") or r.type,
@@ -260,6 +262,8 @@ class Neo4jGraphRepository:
                         "confidence": r.get("confidence"),
                         "group_id": r.get("group_id"),
                         "doc_id": r.get("doc_id"),
+                        "head_name": start.get("name") if start is not None else None,
+                        "tail_name": end.get("name") if end is not None else None,
                     }
                 )
 
