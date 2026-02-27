@@ -208,7 +208,7 @@ def test_full_retrieval_with_real_db(real_doc_texts, pytestconfig) -> None:
 
         keyword_q = _pick_keyword_query(example_chunk_text)
         print("\n[Keyword] query=", repr(keyword_q))
-        keyword_res = rm.keyword(
+        keyword_res = rm.chunks_keyword(
             group_id=group_id,
             query=keyword_q,
             top_k=10,
@@ -226,7 +226,7 @@ def test_full_retrieval_with_real_db(real_doc_texts, pytestconfig) -> None:
 
         semantic_q = _pick_semantic_query(example_chunk_text)
         print("\n[Semantic] query=", repr(semantic_q))
-        semantic_res = rm.native(
+        semantic_res = rm.chunks_vector(
             group_id=group_id,
             query=semantic_q,
             top_k=10,
@@ -242,7 +242,7 @@ def test_full_retrieval_with_real_db(real_doc_texts, pytestconfig) -> None:
         assert all(h.group_id == group_id for h in semantic_res.semantic_hits)
 
         print("\n[Native] query=", repr(semantic_q))
-        native_res = rm.native(
+        native_res = rm.chunks_vector(
             group_id=group_id,
             query=semantic_q,
             top_k=10,
@@ -254,36 +254,17 @@ def test_full_retrieval_with_real_db(real_doc_texts, pytestconfig) -> None:
         assert all(h.group_id == group_id for h in native_res.semantic_hits)
 
         entity_name = _pick_graph_entity_name(group_id=group_id, doc_id=first_doc_id)
-        if entity_name:
-            highlow = f"{entity_name}>{entity_name}"
+        if not entity_name:
+            pytest.skip("No entity extracted for entities/relations retrieval in this run")
 
-            print("\n[Local] highlow=", repr(highlow))
-            local_res = rm.local(
-                group_id=group_id,
-                query=semantic_q,
-                graph_entity_name=highlow,
-                graph_max_depth=2,
-                graph_limit=50,
-                rerank_enabled=False,
-            )
-            assert local_res.local_graph is not None
-            print("[Local] nodes=", len(local_res.local_graph.nodes), "edges=", len(local_res.local_graph.edges))
-            assert isinstance(local_res.local_graph.nodes, list)
+        print("\n[Entities] query=", repr(entity_name))
+        ents = rm.entities(group_id=group_id, query=entity_name, top_k=10, doc_id=first_doc_id)
+        assert isinstance(ents, list)
+        assert len(ents) > 0
 
-            print("\n[Global] highlow=", repr(highlow))
-            global_res = rm.global_(
-                group_id=group_id,
-                query=semantic_q,
-                graph_entity_name=highlow,
-                graph_max_depth=2,
-                graph_limit=50,
-                rerank_enabled=False,
-            )
-            assert global_res.global_graph is not None
-            print("[Global] nodes=", len(global_res.global_graph.nodes), "edges=", len(global_res.global_graph.edges))
-            assert isinstance(global_res.global_graph.nodes, list)
-        else:
-            pytest.skip("No entity extracted for local/global retrieval in this run")
+        print("\n[Relations] query=", repr(semantic_q))
+        rels = rm.relations(group_id=group_id, query=semantic_q, top_k=10, doc_id=first_doc_id)
+        assert isinstance(rels, list)
 
     finally:
         if pause_s > 0:

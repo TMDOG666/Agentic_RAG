@@ -439,11 +439,11 @@ def main() -> int:
             print(f"  high_keywords={high_kw}")
             print(f"  low_keywords={low_kw}")
 
-            kw = api.keyword(group_id=group_id, query=c.query, top_k=top_k, rerank_enabled=False)
-            _print_hits(title=f"Keyword/{c.name}", hits=kw.keyword_hits, expected=c.expected_substrings)
+            kw = api.chunks_keyword(group_id=group_id, query=c.query, top_k=top_k, rerank_enabled=False)
+            _print_hits(title=f"ChunksKeyword/{c.name}", hits=kw.keyword_hits, expected=c.expected_substrings)
 
-            nat = api.native(group_id=group_id, query=c.query, top_k=top_k, rerank_enabled=False)
-            _print_hits(title=f"Native/{c.name}", hits=nat.semantic_hits, expected=c.expected_substrings)
+            nat = api.chunks_vector(group_id=group_id, query=c.query, top_k=top_k, rerank_enabled=False)
+            _print_hits(title=f"ChunksVector/{c.name}", hits=nat.semantic_hits, expected=c.expected_substrings)
 
             local_param = _keywords_to_param(low_kw)
             global_param = _keywords_to_param(high_kw)

@@ -89,16 +89,11 @@ python -m script.grag.eval_zhiyun_2024_report \
 
 - 使用 `PreprocessingManager(use_llm=False)` 解析 docx -> 文本（只做解析 + basic_clean）。
 - 使用 `GRAG.build_kg(...)` 入库（Postgres + Milvus + Neo4j + graph_index collection）。
-- 依次评测 4 种检索模式：
-  - `GRAG.keyword(...)`
-  - `GRAG.native(...)`
-  - `GRAG.local(...)`
-  - `GRAG.global_(...)`
-
-其中 local/global_：
-
-- 脚本会为每个问题内置一组 **high/low 关键词**（逗号分隔），用于稳定地驱动 AdvancedRetrievalManager 的 local/global 扩图入口。
-- 你也可以通过 `--graph-entity` 覆盖（会同时覆盖 local 与 global_）。
+- 依次评测检索模式：
+  - `GRAG.chunks_keyword(...)`
+  - `GRAG.chunks_vector(...)`
+  - `GRAG.entities(...)`
+  - `GRAG.relations(...)`
 - 根据原文构造若干问题，打印每种模式的：
   - hits 数量
   - top1 是否命中 / 是否有任意命中（简单召回/质量指标）

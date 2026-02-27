@@ -271,6 +271,56 @@ class BaseRetrievalManager:
             return GraphSubgraphResult(nodes=[], edges=[])
         return self._merge_subgraphs(subgraphs)
 
+    def search_relations_by_entities(
+        self,
+        *,
+        group_id: str,
+        entity_names: Sequence[str],
+        limit: int = 200,
+        doc_id: Optional[str] = None,
+    ) -> list[dict]:
+        """输入实体列表，返回与实体相关的关系（Neo4j，1-hop）。"""
+        if not str(group_id).strip():
+            raise ValueError("group_id is required")
+        names = [str(x or "").strip() for x in (entity_names or [])]
+        names = [n for n in names if n]
+        if not names:
+            return []
+        return self._graph.relations_by_entities(
+            group_id=group_id,
+            entity_names=names,
+            limit=int(limit),
+            doc_id=doc_id,
+        )
+
+    def search_entities_by_relations(
+        self,
+        *,
+        group_id: str,
+        relation_ids: Optional[Sequence[str]] = None,
+        relation_triples: Optional[Sequence[dict]] = None,
+        limit: int = 200,
+        doc_id: Optional[str] = None,
+    ) -> list[dict]:
+        """输入关系列表，返回与关系相关的实体（Neo4j，端点实体集合）。"""
+        if not str(group_id).strip():
+            raise ValueError("group_id is required")
+
+        rids = [str(x or "").strip() for x in (relation_ids or [])]
+        rids = [x for x in rids if x]
+        triples = list(relation_triples or [])
+
+        if not rids and not triples:
+            return []
+
+        return self._graph.entities_by_relations(
+            group_id=group_id,
+            relation_ids=rids,
+            relation_triples=triples,
+            limit=int(limit),
+            doc_id=doc_id,
+        )
+
     def expand_graph_by_triples(
         self,
         *,

@@ -62,16 +62,14 @@ class GRAG:
 
         api = GRAG()
         api.build_kg(...)
-        res = api.native(...)
+        res = api.chunks_vector(...)
 
     职责边界：
     - 该类不直接操作 Postgres/Milvus/Neo4j 驱动；所有底层交互由 DataClientGraphStorage 与 RetrievalManager 完成。
     - 该类不做 rerank / vector / graph 算法改动，只负责把参数组织好并调用。
 
-    设计目标（为什么拆成 4 个查询函数）：
-    - agent skills/函数调用 场景下，函数参数越多越容易被 LLM 误填/漏填。
-    - 因此把 query 拆成 native/keyword/local/global_ 四个稳定入口，
-      每个入口只暴露该检索模式需要的最小参数集合。
+    设计目标：
+    - 对外提供“原子、可组合”的检索范式入口，便于上层/agent 灵活编排。
     """
 
     def __init__(
@@ -174,7 +172,7 @@ class GRAG:
         - milvus collection 与 graph index collection 的默认值归并
 
         默认值来源（覆盖顺序从高到低）：
-        - 本次调用 native/keyword/local/global_ 传入的 milvus_* 参数
+        - 本次调用 chunks_vector/chunks_keyword/entities/relations 传入的 milvus_* 参数
         - 创建 GRAG 时传入的 query_options
         - 若未传 query_options，则默认沿用 build_options（见 __init__）
         """
@@ -193,7 +191,7 @@ class GRAG:
             milvus_graph_index_collection_name=graph_index_collection,
         )
 
-    def native(
+    def chunks_vector(
         self,
         *,
         group_id: str,
@@ -207,37 +205,11 @@ class GRAG:
         milvus_collection_name: Optional[str] = None,
         milvus_graph_index_collection_name: Optional[str] = None,
     ) -> RetrievalResult:
-        """向量检索（语义检索）。
-
-        典型用途：
-        - 给定 query，通过 embedding 在 Milvus 中召回相似 chunks。
-
-        Args:
-            group_id:
-                必填。数据隔离维度。
-            query:
-                必填。用户查询。
-            top_k:
-                返回条数。
-            doc_id/doc_time_start/doc_time_end:
-                chunk 检索过滤条件（可用于把检索范围限制在某篇文档或时间范围内）。
-            rerank_enabled/rerank_provider:
-                可选重排序控制。
-                - None：由 RetrievalManager 内部配置/默认值决定
-                - True/False：强制覆盖
-            milvus_collection_name:
-                覆盖默认 Milvus collection。
-            milvus_graph_index_collection_name:
-                覆盖默认 graph index collection（native 通常不需要，但保持接口一致以便统一配置）。
-
-        Returns:
-            RetrievalResult：检索结果。
-        """
         rm = self._make_retrieval_manager(
             milvus_collection_name=milvus_collection_name,
             milvus_graph_index_collection_name=milvus_graph_index_collection_name,
         )
-        return rm.native(
+        return rm.chunks_vector(
             group_id=group_id,
             query=query,
             top_k=int(top_k),
@@ -248,7 +220,7 @@ class GRAG:
             rerank_provider=rerank_provider,
         )
 
-    def keyword(
+    def chunks_keyword(
         self,
         *,
         group_id: str,
@@ -262,34 +234,11 @@ class GRAG:
         milvus_collection_name: Optional[str] = None,
         milvus_graph_index_collection_name: Optional[str] = None,
     ) -> RetrievalResult:
-        """关键字检索（文本检索）。
-
-        典型用途：
-        - 关键词/子串匹配召回 chunks（通常由 Postgres 完成）。
-        - 不依赖 embedding，但为了让外部统一配置，本接口仍允许传入 milvus_collection_name。
-
-        Args:
-            group_id:
-                必填。数据隔离维度。
-            query:
-                必填。用户查询（关键词）。
-            top_k:
-                返回条数。
-            doc_id/doc_time_start/doc_time_end:
-                过滤条件：限制在某个 doc_id 或时间范围内检索。
-            rerank_enabled/rerank_provider:
-                可选重排序控制。
-                - None：由 RetrievalManager 内部配置/默认值决定
-                - True/False：强制覆盖
-
-        Returns:
-            RetrievalResult：检索结果（keyword_hits 会有值）。
-        """
         rm = self._make_retrieval_manager(
             milvus_collection_name=milvus_collection_name,
             milvus_graph_index_collection_name=milvus_graph_index_collection_name,
         )
-        return rm.keyword(
+        return rm.chunks_keyword(
             group_id=group_id,
             query=query,
             top_k=int(top_k),
@@ -300,91 +249,92 @@ class GRAG:
             rerank_provider=rerank_provider,
         )
 
-    def local(
+    def entities(
         self,
         *,
         group_id: str,
         query: str,
-        graph_entity_name: Optional[str] = None,
-        graph_max_depth: int = 2,
-        graph_limit: int = 50,
         top_k: int = 20,
         doc_id: Optional[str] = None,
-        rerank_enabled: Optional[bool] = None,
-        rerank_provider: Optional[str] = None,
+        output_fields: Optional[Sequence[str]] = None,
         milvus_collection_name: Optional[str] = None,
         milvus_graph_index_collection_name: Optional[str] = None,
-    ) -> RetrievalResult:
-        """Local graph 检索。
-
-        典型用途：
-        - 在“局部子图”范围内做扩图/召回，用于回答与某个实体邻域相关的问题。
-
-        Args:
-            graph_entity_name:
-                图检索入口实体。
-                当前测试用例使用 "high>low" 的字符串协议；具体解析逻辑在 RetrievalManager 内部。
-            graph_max_depth:
-                扩图最大深度。
-            graph_limit:
-                扩图规模限制。
-
-        Returns:
-            RetrievalResult：检索结果（local_graph 会有值）。
-        """
+    ) -> list[dict]:
         rm = self._make_retrieval_manager(
             milvus_collection_name=milvus_collection_name,
             milvus_graph_index_collection_name=milvus_graph_index_collection_name,
         )
-        return rm.local(
+        return rm.entities(
             group_id=group_id,
             query=query,
             top_k=int(top_k),
             doc_id=doc_id,
-            graph_entity_name=graph_entity_name,
-            graph_max_depth=int(graph_max_depth),
-            graph_limit=int(graph_limit),
-            rerank_enabled=bool(rerank_enabled),
-            rerank_provider=rerank_provider,
+            output_fields=list(output_fields) if output_fields is not None else None,
         )
 
-    def global_(
+    def relations(
         self,
         *,
         group_id: str,
         query: str,
-        graph_entity_name: Optional[str] = None,
-        graph_max_depth: int = 2,
-        graph_limit: int = 50,
         top_k: int = 20,
         doc_id: Optional[str] = None,
-        rerank_enabled: Optional[bool] = None,
-        rerank_provider: Optional[str] = None,
+        output_fields: Optional[Sequence[str]] = None,
         milvus_collection_name: Optional[str] = None,
         milvus_graph_index_collection_name: Optional[str] = None,
-    ) -> RetrievalResult:
-        """Global graph 检索。
-
-        典型用途：
-        - 更偏“全局”的图召回/扩展策略（实现细节在 RetrievalManager/AdvancedRetrievalManager）。
-
-        参数含义与 local 一致。
-
-        Returns:
-            RetrievalResult：检索结果（global_graph 会有值）。
-        """
+    ) -> list[dict]:
         rm = self._make_retrieval_manager(
             milvus_collection_name=milvus_collection_name,
             milvus_graph_index_collection_name=milvus_graph_index_collection_name,
         )
-        return rm.global_(
+        return rm.relations(
             group_id=group_id,
             query=query,
             top_k=int(top_k),
             doc_id=doc_id,
-            graph_entity_name=graph_entity_name,
-            graph_max_depth=int(graph_max_depth),
-            graph_limit=int(graph_limit),
-            rerank_enabled=bool(rerank_enabled),
-            rerank_provider=rerank_provider,
+            output_fields=list(output_fields) if output_fields is not None else None,
+        )
+
+    def relations_by_entities(
+        self,
+        *,
+        group_id: str,
+        entity_names: Sequence[str],
+        limit: int = 200,
+        doc_id: Optional[str] = None,
+        milvus_collection_name: Optional[str] = None,
+        milvus_graph_index_collection_name: Optional[str] = None,
+    ) -> list[dict]:
+        rm = self._make_retrieval_manager(
+            milvus_collection_name=milvus_collection_name,
+            milvus_graph_index_collection_name=milvus_graph_index_collection_name,
+        )
+        return rm.relations_by_entities(
+            group_id=group_id,
+            entity_names=list(entity_names or []),
+            limit=int(limit),
+            doc_id=doc_id,
+        )
+
+    def entities_by_relations(
+        self,
+        *,
+        group_id: str,
+        relation_ids: Optional[Sequence[str]] = None,
+        relation_triples: Optional[Sequence[dict]] = None,
+        limit: int = 200,
+        doc_id: Optional[str] = None,
+        milvus_collection_name: Optional[str] = None,
+        milvus_graph_index_collection_name: Optional[str] = None,
+    ) -> list[dict]:
+        rm = self._make_retrieval_manager(
+            milvus_collection_name=milvus_collection_name,
+            milvus_graph_index_collection_name=milvus_graph_index_collection_name,
+        )
+        return rm.entities_by_relations(
+            group_id=group_id,
+            relation_ids=list(relation_ids or []) if relation_ids is not None else None,
+            relation_triples=list(relation_triples or []) if relation_triples is not None else None,
+            limit=int(limit),
+            doc_id=doc_id,
         )

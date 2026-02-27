@@ -152,7 +152,7 @@ def test_grag_query_wires_retrieval_manager_and_search(monkeypatch: pytest.Monke
             called["rm_collection"] = milvus_collection_name
             called["rm_graph_index_collection"] = milvus_graph_index_collection_name
 
-        def keyword(self, **kwargs):
+        def chunks_keyword(self, **kwargs):
             called["search_kwargs"] = dict(kwargs)
             return _Sentinel("retrieval_result")
 
@@ -160,7 +160,7 @@ def test_grag_query_wires_retrieval_manager_and_search(monkeypatch: pytest.Monke
     monkeypatch.setattr(ep, "RetrievalManager", FakeRM)
 
     api = ep.GRAG(query_options=ep.QueryOptions(milvus_collection_name="cQ"))
-    out = api.keyword(
+    out = api.chunks_keyword(
         group_id="g",
         query="q",
         top_k=7,
@@ -204,15 +204,98 @@ def test_grag_default_query_collection_follows_build_options(monkeypatch: pytest
         def __init__(self, *, milvus_collection_name=None, milvus_graph_index_collection_name=None):
             called["rm_collection"] = milvus_collection_name
 
-        def native(self, **kwargs):
+        def chunks_vector(self, **kwargs):
             return _Sentinel("retrieval_result")
 
     monkeypatch.setattr(ep, "RetrievalManager", FakeRM)
 
     api = ep.GRAG(build_options=ep.BuildOptions(milvus_collection_name="c0"))
-    api.native(group_id="g", query="q")
+    api.chunks_vector(group_id="g", query="q")
 
     assert called["rm_collection"] == "c0"
+
+
+def test_grag_query_wires_relations_by_entities(monkeypatch: pytest.MonkeyPatch) -> None:
+    import grag.entrypoint as ep
+
+    called = {
+        "rm_collection": None,
+        "rm_graph_index_collection": None,
+        "kwargs": None,
+    }
+
+    class _FakeCM:
+        def initialize(self):
+            return True
+
+    class FakeRM:
+        def __init__(self, *, milvus_collection_name=None, milvus_graph_index_collection_name=None):
+            called["rm_collection"] = milvus_collection_name
+            called["rm_graph_index_collection"] = milvus_graph_index_collection_name
+
+        def relations_by_entities(self, **kwargs):
+            called["kwargs"] = dict(kwargs)
+            return [{"type": "REL"}]
+
+    monkeypatch.setattr(ep, "get_config_manager", lambda: _FakeCM())
+    monkeypatch.setattr(ep, "RetrievalManager", FakeRM)
+
+    api = ep.GRAG(query_options=ep.QueryOptions(milvus_collection_name="cQ"))
+    out = api.relations_by_entities(group_id="g", entity_names=["A", "B"], limit=12, doc_id="d")
+
+    assert out == [{"type": "REL"}]
+    assert called["rm_collection"] == "cQ"
+    assert called["kwargs"] == {
+        "group_id": "g",
+        "entity_names": ["A", "B"],
+        "limit": 12,
+        "doc_id": "d",
+    }
+
+
+def test_grag_query_wires_entities_by_relations(monkeypatch: pytest.MonkeyPatch) -> None:
+    import grag.entrypoint as ep
+
+    called = {
+        "rm_collection": None,
+        "rm_graph_index_collection": None,
+        "kwargs": None,
+    }
+
+    class _FakeCM:
+        def initialize(self):
+            return True
+
+    class FakeRM:
+        def __init__(self, *, milvus_collection_name=None, milvus_graph_index_collection_name=None):
+            called["rm_collection"] = milvus_collection_name
+            called["rm_graph_index_collection"] = milvus_graph_index_collection_name
+
+        def entities_by_relations(self, **kwargs):
+            called["kwargs"] = dict(kwargs)
+            return [{"labels": ["Entity"], "name": "X"}]
+
+    monkeypatch.setattr(ep, "get_config_manager", lambda: _FakeCM())
+    monkeypatch.setattr(ep, "RetrievalManager", FakeRM)
+
+    api = ep.GRAG(query_options=ep.QueryOptions(milvus_collection_name="cQ"))
+    out = api.entities_by_relations(
+        group_id="g",
+        relation_ids=["r1"],
+        relation_triples=[{"head_name": "A", "tail_name": "B", "relation_type": "owns"}],
+        limit=9,
+        doc_id="d",
+    )
+
+    assert out == [{"labels": ["Entity"], "name": "X"}]
+    assert called["rm_collection"] == "cQ"
+    assert called["kwargs"] == {
+        "group_id": "g",
+        "relation_ids": ["r1"],
+        "relation_triples": [{"head_name": "A", "tail_name": "B", "relation_type": "owns"}],
+        "limit": 9,
+        "doc_id": "d",
+    }
 
 
 @pytest.mark.integration
@@ -281,10 +364,10 @@ def test_grag_entrypoint_real_build_and_query(real_doc_texts, pytestconfig) -> N
 
         assert first_doc_id is not None
 
-        # 2) keyword
+        # 2) chunks_keyword
         keyword_q = _pick_keyword_query(example_chunk_text)
         print("\n[Keyword] query=", repr(keyword_q))
-        keyword_res = api.keyword(
+        keyword_res = api.chunks_keyword(
             group_id=group_id,
             query=keyword_q,
             top_k=10,
@@ -298,10 +381,10 @@ def test_grag_entrypoint_real_build_and_query(real_doc_texts, pytestconfig) -> N
             )
         assert len(keyword_res.keyword_hits) > 0
 
-        # 3) native
+        # 3) chunks_vector
         semantic_q = _pick_semantic_query(example_chunk_text)
         print("\n[Native] query=", repr(semantic_q))
-        native_res = api.native(
+        native_res = api.chunks_vector(
             group_id=group_id,
             query=semantic_q,
             top_k=10,
@@ -311,37 +394,31 @@ def test_grag_entrypoint_real_build_and_query(real_doc_texts, pytestconfig) -> N
         print("[Native] hits=", len(native_res.semantic_hits))
         assert len(native_res.semantic_hits) > 0
 
-        # 4) local / global
+        # 4) entities / relations (graph_index paradigms)
         entity_name = _pick_graph_entity_name(group_id=group_id, doc_id=first_doc_id)
         if not entity_name:
-            pytest.skip("No entity extracted for local/global retrieval in this run")
-        highlow = f"{entity_name}>{entity_name}"
+            pytest.skip("No entity extracted for entities/relations retrieval in this run")
 
-        print("\n[Local] highlow=", repr(highlow))
-        local_res = api.local(
+        print("\n[Entities] query=", repr(entity_name))
+        ents = api.entities(
             group_id=group_id,
-            query=semantic_q,
-            graph_entity_name=highlow,
-            graph_max_depth=2,
-            graph_limit=50,
-            rerank_enabled=False,
+            query=entity_name,
+            top_k=10,
+            doc_id=first_doc_id,
             milvus_collection_name=collection_name,
         )
-        assert local_res.local_graph is not None
-        print("[Local] nodes=", len(local_res.local_graph.nodes), "edges=", len(local_res.local_graph.edges))
+        assert isinstance(ents, list)
+        assert len(ents) > 0
 
-        print("\n[Global] highlow=", repr(highlow))
-        global_res = api.global_(
+        print("\n[Relations] query=", repr(semantic_q))
+        rels = api.relations(
             group_id=group_id,
             query=semantic_q,
-            graph_entity_name=highlow,
-            graph_max_depth=2,
-            graph_limit=50,
-            rerank_enabled=False,
+            top_k=10,
+            doc_id=first_doc_id,
             milvus_collection_name=collection_name,
         )
-        assert global_res.global_graph is not None
-        print("[Global] nodes=", len(global_res.global_graph.nodes), "edges=", len(global_res.global_graph.edges))
+        assert isinstance(rels, list)
 
     finally:
         if pause_s > 0:

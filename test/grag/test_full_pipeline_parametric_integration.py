@@ -62,8 +62,10 @@ def _parse_modes(raw: str) -> list[str]:
     for p in parts:
         if not p:
             continue
-        if p in {"vector", "native"}:
-            out.append("native")
+        if p in {"vector", "native", "chunks_vector"}:
+            out.append("chunks_vector")
+        elif p in {"keyword", "chunks_keyword"}:
+            out.append("chunks_keyword")
         else:
             out.append(p)
     # 去重但保持顺序
@@ -199,9 +201,9 @@ def test_full_pipeline_parametric(real_doc_texts, pytestconfig) -> None:
         entity_name = _pick_graph_entity_name(group_id=group_id, doc_id=first_doc_id)
 
         for m in modes:
-            if m == "keyword":
+            if m == "chunks_keyword":
                 print("\n[Keyword] query=", repr(keyword_q))
-                res = api.keyword(
+                res = api.chunks_keyword(
                     group_id=group_id,
                     query=keyword_q,
                     top_k=10,
@@ -212,9 +214,9 @@ def test_full_pipeline_parametric(real_doc_texts, pytestconfig) -> None:
                 assert len(res.keyword_hits) > 0
                 _maybe_print_json(title="Keyword", payload=res, enabled=print_enabled)
 
-            elif m == "native":
+            elif m == "chunks_vector":
                 print("\n[Native] query=", repr(semantic_q))
-                res = api.native(
+                res = api.chunks_vector(
                     group_id=group_id,
                     query=semantic_q,
                     top_k=10,
@@ -225,40 +227,30 @@ def test_full_pipeline_parametric(real_doc_texts, pytestconfig) -> None:
                 assert len(res.semantic_hits) > 0
                 _maybe_print_json(title="Native", payload=res, enabled=print_enabled)
 
-            elif m == "local":
-                # local/global 使用 high>low 协议：此处沿用 existing tests 的简化用法
+            elif m == "entities":
                 if not entity_name:
-                    pytest.skip("No entity extracted for local retrieval in this run")
-                highlow = f"{entity_name}>{entity_name}"
-                print("\n[Local] highlow=", repr(highlow), "query=", repr(semantic_q))
-                res = api.local(
+                    pytest.skip("No entity extracted for entities retrieval in this run")
+                print("\n[Entities] query=", repr(entity_name))
+                hits = api.entities(
                     group_id=group_id,
-                    query=semantic_q,
-                    graph_entity_name=highlow,
-                    graph_max_depth=2,
-                    graph_limit=50,
-                    rerank_enabled=False,
+                    query=entity_name,
+                    top_k=10,
+                    doc_id=doc_id,
                 )
-                assert res.local_graph is not None
-                print("[Local] nodes=", len(res.local_graph.nodes), "edges=", len(res.local_graph.edges))
-                _maybe_print_json(title="Local", payload=res, enabled=print_enabled)
+                assert isinstance(hits, list)
+                assert len(hits) > 0
+                _maybe_print_json(title="Entities", payload=hits, enabled=print_enabled)
 
-            elif m == "global":
-                if not entity_name:
-                    pytest.skip("No entity extracted for global retrieval in this run")
-                highlow = f"{entity_name}>{entity_name}"
-                print("\n[Global] highlow=", repr(highlow), "query=", repr(semantic_q))
-                res = api.global_(
+            elif m == "relations":
+                print("\n[Relations] query=", repr(semantic_q))
+                hits = api.relations(
                     group_id=group_id,
                     query=semantic_q,
-                    graph_entity_name=highlow,
-                    graph_max_depth=2,
-                    graph_limit=50,
-                    rerank_enabled=False,
+                    top_k=10,
+                    doc_id=doc_id,
                 )
-                assert res.global_graph is not None
-                print("[Global] nodes=", len(res.global_graph.nodes), "edges=", len(res.global_graph.edges))
-                _maybe_print_json(title="Global", payload=res, enabled=print_enabled)
+                assert isinstance(hits, list)
+                _maybe_print_json(title="Relations", payload=hits, enabled=print_enabled)
 
             else:
                 raise ValueError(f"Unsupported pipeline mode: {m}")

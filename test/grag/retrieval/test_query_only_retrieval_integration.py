@@ -78,7 +78,7 @@ def test_query_only_retrieval(pytestconfig) -> None:
 
     if keyword_q:
         print("\n[Keyword] query=", repr(keyword_q))
-        res = rm.keyword(group_id=group_id, query=keyword_q, top_k=10, rerank_enabled=False)
+        res = rm.chunks_keyword(group_id=group_id, query=keyword_q, top_k=10, rerank_enabled=False)
         print("[Keyword] hits=", len(res.keyword_hits))
         for i, h in enumerate(res.keyword_hits[:5]):
             print(f"  - {i}: doc_id={h.doc_id} chunk_id={h.chunk_id} index={h.index} text={repr((h.text or '')[:160])}")
@@ -93,7 +93,7 @@ def test_query_only_retrieval(pytestconfig) -> None:
                 "If you copied a numeric id from UI, pass the actual collection name instead."
             )
         print("\n[Semantic] query=", repr(semantic_q))
-        res = rm.native(group_id=group_id, query=semantic_q, top_k=10, rerank_enabled=False)
+        res = rm.chunks_vector(group_id=group_id, query=semantic_q, top_k=10, rerank_enabled=False)
         print("[Semantic] hits=", len(res.semantic_hits))
         for i, h in enumerate(res.semantic_hits[:5]):
             print(
@@ -112,7 +112,7 @@ def test_query_only_retrieval(pytestconfig) -> None:
                 "If you copied a numeric id from UI, pass the actual collection name instead."
             )
         print("\n[Native] query=", repr(native_q))
-        res = rm.native(group_id=group_id, query=native_q, top_k=10, rerank_enabled=False)
+        res = rm.chunks_vector(group_id=group_id, query=native_q, top_k=10, rerank_enabled=False)
         print("[Native] semantic_hits=", len(res.semantic_hits))
         for i, h in enumerate(res.semantic_hits[:5]):
             print(
@@ -122,60 +122,37 @@ def test_query_only_retrieval(pytestconfig) -> None:
             )
 
     if graph_entity:
-        print("\n[Graph] entity_name=", repr(graph_entity))
-        res = rm.local(
+        print("\n[Entities] query=", repr(graph_entity))
+        hits = rm.entities(
             group_id=group_id,
             query=graph_entity,
-            graph_entity_name=graph_entity,
-            graph_max_depth=2,
-            graph_limit=50,
-            rerank_enabled=False,
+            top_k=10,
+            doc_id=doc_id,
         )
-        if res.local_graph is None:
-            print("[Graph] local_graph=None")
-        else:
-            print("[Graph] nodes=", len(res.local_graph.nodes), "edges=", len(res.local_graph.edges))
-            for i, n in enumerate(res.local_graph.nodes[:8]):
-                print(
-                    f"  - {i}: name={repr(n.get('name'))} type={repr(n.get('type'))} desc={repr((n.get('description') or '')[:160])}"
-                )
-        _maybe_print_result(title="Graph", res=res, enabled=print_enabled)
+        print("[Entities] hits=", len(hits))
+        _maybe_print_result(title="Entities", res=hits, enabled=print_enabled)
 
     if local_q:
-        if not graph_entity:
-            pytest.skip("Missing --graph-entity for local graph retrieval")
-        print("\n[Local] query=", repr(local_q), "graph_entity=", repr(graph_entity))
-        res = rm.local(
+        print("\n[Relations] query=", repr(local_q))
+        hits = rm.relations(
             group_id=group_id,
             query=local_q,
-            graph_entity_name=graph_entity,
-            graph_max_depth=2,
-            graph_limit=50,
-            rerank_enabled=False,
+            top_k=10,
+            doc_id=doc_id,
         )
-        if res.local_graph is None:
-            print("[Local] local_graph=None")
-        else:
-            print("[Local] nodes=", len(res.local_graph.nodes), "edges=", len(res.local_graph.edges))
-        _maybe_print_result(title="Local", res=res, enabled=print_enabled)
+        print("[Relations] hits=", len(hits))
+        _maybe_print_result(title="Relations", res=hits, enabled=print_enabled)
 
     if global_q:
-        if not graph_entity:
-            pytest.skip("Missing --graph-entity for global graph retrieval")
-        print("\n[Global] query=", repr(global_q), "graph_entity=", repr(graph_entity))
-        res = rm.global_(
+        print("\n[Relations] query=", repr(global_q))
+        hits = rm.relations(
             group_id=group_id,
             query=global_q,
-            graph_entity_name=graph_entity,
-            graph_max_depth=2,
-            graph_limit=50,
-            rerank_enabled=False,
+            top_k=10,
+            doc_id=doc_id,
         )
-        if res.global_graph is None:
-            print("[Global] global_graph=None")
-        else:
-            print("[Global] nodes=", len(res.global_graph.nodes), "edges=", len(res.global_graph.edges))
-        _maybe_print_result(title="Global", res=res, enabled=print_enabled)
+        print("[Relations] hits=", len(hits))
+        _maybe_print_result(title="Relations", res=hits, enabled=print_enabled)
 
     if not (keyword_q or semantic_q or native_q or local_q or global_q or graph_entity):
         pytest.skip("No query provided: pass --keyword-q and/or --semantic-q and/or --graph-entity")

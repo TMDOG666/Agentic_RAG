@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Sequence
 
 from grag.data_client import get_data_manager
 from grag.storage.repositories.neo4j_repository import Neo4jGraphRepository
@@ -68,4 +68,50 @@ class GraphRetriever:
         return GraphSubgraphResult(
             nodes=list(data.get("nodes") or []),
             edges=list(data.get("edges") or []),
+        )
+
+    def relations_by_entities(
+        self,
+        *,
+        group_id: str,
+        entity_names: Sequence[str],
+        limit: int = 200,
+        doc_id: Optional[str] = None,
+    ) -> list[dict]:
+        if not str(group_id).strip():
+            raise ValueError("group_id is required")
+        names = [str(x or "").strip() for x in (entity_names or [])]
+        names = [n for n in names if n]
+        if not names:
+            return []
+        return list(
+            self._neo4j_repo.search_relations_by_entities(
+                group_id=group_id,
+                entity_names=names,
+                limit=int(limit),
+                doc_id=doc_id,
+            )
+            or []
+        )
+
+    def entities_by_relations(
+        self,
+        *,
+        group_id: str,
+        relation_ids: Sequence[str],
+        relation_triples: Sequence[dict],
+        limit: int = 200,
+        doc_id: Optional[str] = None,
+    ) -> list[dict]:
+        if not str(group_id).strip():
+            raise ValueError("group_id is required")
+        return list(
+            self._neo4j_repo.search_entities_by_relations(
+                group_id=group_id,
+                relation_ids=list(relation_ids or []),
+                relation_triples=list(relation_triples or []),
+                limit=int(limit),
+                doc_id=doc_id,
+            )
+            or []
         )

@@ -120,7 +120,7 @@ class TestRetrievalManagerRerank:
 
         monkeypatch.setattr(rm_mod, "rerank_chunk_hits", fake_rerank_chunk_hits)
 
-        res = rm.keyword(
+        res = rm.chunks_keyword(
             group_id="g",
             query="q",
             top_k=10,
@@ -137,52 +137,9 @@ class TestRetrievalManagerRerank:
         rm = RetrievalManager.__new__(RetrievalManager)
 
         with pytest.raises(ValueError):
-            rm.keyword(group_id="", query="q")  # type: ignore[arg-type]
+            rm.chunks_keyword(group_id="", query="q")  # type: ignore[arg-type]
 
     def test_retrieval_manager_reranks_graph_nodes(self, monkeypatch: pytest.MonkeyPatch):
-        from grag.retrieval import RetrievalManager, RetrievalResult, GraphSubgraphResult
-        import grag.retrieval.advanced_retrieval_manager as rm_mod
-        from grag.retrieval.base_retriever.base_retrieval_manager import BaseRetrievalManager
+        import pytest
 
-        rm = RetrievalManager.__new__(RetrievalManager)
-        rm._base = BaseRetrievalManager.__new__(BaseRetrievalManager)
-
-        class FakeKeyword:
-            def search(self, **kwargs):
-                return []
-
-        class FakeSemantic:
-            def search(self, **kwargs):
-                return []
-
-        class FakeGraph:
-            def search(self, **kwargs):
-                return GraphSubgraphResult(
-                    nodes=[
-                        {"name": "A", "description": "aaa"},
-                        {"name": "B", "description": "bbb"},
-                    ],
-                    edges=[{"type": "REL"}],
-                )
-
-        rm._base._keyword = FakeKeyword()
-        rm._base._semantic = FakeSemantic()
-        rm._base._graph = FakeGraph()
-
-        def fake_rerank_graph_nodes(*, query, nodes, top_k=None, provider_name=None):
-            return (list(reversed(nodes)), None)
-
-        monkeypatch.setattr(rm_mod, "rerank_graph_nodes", fake_rerank_graph_nodes)
-
-        res = rm.global_(
-            group_id="g",
-            query="q",
-            top_k=10,
-            rerank_enabled=True,
-        )
-
-        assert isinstance(res, RetrievalResult)
-        assert res.graph is not None
-        assert [n.get("name") for n in res.graph.nodes] == ["B", "A"]
-        # edges 不应被改变
-        assert res.graph.edges == [{"type": "REL"}]
+        pytest.skip("Graph local/global retrieval mode has been removed")
