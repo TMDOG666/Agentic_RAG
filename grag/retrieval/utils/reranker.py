@@ -23,7 +23,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional, Protocol, Sequence, Tuple, TypeVar
+from typing import Any, List, Optional, Protocol, Sequence, Tuple, TypeVar
 
 from grag.model.reranker_client import RerankerClient
 
@@ -216,6 +216,157 @@ def rerank_chunk_hits(
     )
 
     ordered: List[T] = []
+    used: set[int] = set()
+
+    for doc_text, _score in reranked_docs_with_score:
+        q = index_queue_by_text.get(doc_text)
+        if not q:
+            continue
+        idx = q.pop(0)
+        if idx in used:
+            continue
+        used.add(idx)
+        ordered.append(hits[idx])
+
+    if len(ordered) < len(hits):
+        for i, h in enumerate(hits):
+            if i in used:
+                continue
+            ordered.append(h)
+
+    if top_k is not None:
+        ordered = ordered[: int(top_k)]
+
+    return (
+        ordered,
+        RerankDebugInfo(
+            enabled=True,
+            provider_name=provider_name,
+            input_size=len(hits),
+            output_size=len(ordered),
+        ),
+    )
+
+
+def _build_hit_dict_text(hit: dict[str, Any]) -> str:
+    """把 graph_index 的命中 dict 转为可用于 rerank 的“文本”。
+
+    背景：
+    - entities()/relations() 返回的是 list[dict]（从 Milvus graph_index 返回）。
+    - dict 的字段会随 index schema 演化；因此这里采用“尽可能拼接常见字段”的策略。
+
+    兼容字段：
+    - entity: canonical_name/name/type/description/aliases/doc_name
+    - relation: head_name/tail_name/relation_type/description/doc_name
+    """
+    if not isinstance(hit, dict):
+        return str(hit)
+
+    def s(key: str) -> str:
+        return str(hit.get(key) or "").strip()
+
+    # entity-like
+    canonical_name = s("canonical_name") or s("name") or s("entity_name")
+    typ = s("type")
+    desc = s("description")
+    doc_name = s("doc_name")
+
+    aliases = hit.get("aliases")
+    if isinstance(aliases, (list, tuple)):
+        alias_str = ", ".join([str(a).strip() for a in aliases if str(a).strip()])
+    else:
+        alias_str = str(aliases or "").strip()
+
+    # relation-like
+    head = s("head_name")
+    tail = s("tail_name")
+    rel_type = s("relation_type")
+
+    parts: list[str] = []
+
+    if canonical_name:
+        parts.append(f"name: {canonical_name}")
+    if alias_str:
+        parts.append(f"aliases: {alias_str}")
+    if typ:
+        parts.append(f"type: {typ}")
+    if head or rel_type or tail:
+        triple = " ".join([p for p in [head, rel_type, tail] if p])
+        if triple:
+            parts.append(f"triple: {triple}")
+    if desc:
+        parts.append(f"description: {desc}")
+    if doc_name:
+        parts.append(f"doc: {doc_name}")
+
+    return "\n".join(parts).strip() or canonical_name or desc or "hit"
+
+
+def rerank_dict_hits(
+    *,
+    query: str,
+    hits: Sequence[dict[str, Any]],
+    top_k: Optional[int] = None,
+    provider_name: Optional[str] = None,
+) -> Tuple[List[dict[str, Any]], RerankDebugInfo]:
+    """对 list[dict] 类型的命中结果做重排序。
+
+    该函数用于：
+    - entities(): graph_index(kind=entity) 的命中
+    - relations(): graph_index(kind=relation) 的命中
+
+    降级策略：
+    - query 为空 / hits 为空：不做处理
+    - reranker provider 不可用：返回原始 hits
+    - reranker 调用异常：返回原始 hits
+    """
+    if not str(query or "").strip() or not hits:
+        return (
+            list(hits),
+            RerankDebugInfo(
+                enabled=False,
+                provider_name=provider_name,
+                input_size=len(hits),
+                output_size=len(hits),
+            ),
+        )
+
+    client = RerankerClient(provider_name=provider_name)
+    if not client.is_available():
+        return (
+            list(hits),
+            RerankDebugInfo(
+                enabled=False,
+                provider_name=provider_name,
+                input_size=len(hits),
+                output_size=len(hits),
+            ),
+        )
+
+    texts: List[str] = [_build_hit_dict_text(h) for h in hits]
+
+    index_queue_by_text: dict[str, List[int]] = {}
+    for i, t in enumerate(texts):
+        index_queue_by_text.setdefault(t, []).append(i)
+
+    try:
+        reranked_docs_with_score: List[Tuple[str, float]] = client.rerank(
+            query,
+            texts,
+            top_k=top_k,
+        )
+    except Exception:
+        return (
+            list(hits),
+            RerankDebugInfo(
+                enabled=False,
+                provider_name=provider_name,
+                input_size=len(hits),
+                output_size=len(hits),
+            ),
+        )
+
+    ordered: List[dict[str, Any]] = []
     used: set[int] = set()
 
     for doc_text, _score in reranked_docs_with_score:

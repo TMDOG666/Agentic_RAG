@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Dict, Optional
  
 import yaml
-from skill.registry import SkillsRegistry
+from agent.skill.registry import SkillsRegistry
  
  
 class SkillManager:

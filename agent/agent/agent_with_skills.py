@@ -19,7 +19,7 @@ import os
 import time
 from typing import Any, Optional
 
-from adapter.runtime import create_runtime
+from agent.adapter.runtime import create_runtime
 
 _RUNTIME = None
 

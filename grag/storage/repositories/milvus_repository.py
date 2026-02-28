@@ -210,6 +210,42 @@ class MilvusVectorRepository:
         col.flush()
 
 
+    def delete_chunks_by_ids(self, *, group_id: str, chunk_ids: Sequence[str]) -> None:
+        """按 chunk_id 批量删除向量（使用 pk = {group_id}:{chunk_id}）。"""
+        pymilvus = self._ensure_pymilvus()
+        self._client.connect()
+        name = self._collection_name()
+        if not pymilvus.utility.has_collection(name, using=self._client._alias):
+            return
+
+        ids = [str(x or "").strip() for x in (chunk_ids or [])]
+        ids = [x for x in ids if x]
+        if not ids:
+            return
+
+        col = pymilvus.Collection(name=name, using=self._client._alias)
+        pks = [f"{group_id}:{cid}" for cid in ids]
+        expr = 'pk in ["' + '", "'.join(pks) + '"]'
+        col.delete(expr)
+        col.flush()
+
+
+    def delete_by_doc_id(self, *, group_id: str, doc_id: str) -> None:
+        """按 group_id + doc_id 删除（使用 expr 过滤）。"""
+        pymilvus = self._ensure_pymilvus()
+        self._client.connect()
+        name = self._collection_name()
+        if not pymilvus.utility.has_collection(name, using=self._client._alias):
+            return
+        if not str(group_id).strip() or not str(doc_id).strip():
+            return
+
+        col = pymilvus.Collection(name=name, using=self._client._alias)
+        expr = f'group_id == "{group_id}" and doc_id == "{doc_id}"'
+        col.delete(expr)
+        col.flush()
+
+
     def search_chunk_embeddings(
         self,
         *,

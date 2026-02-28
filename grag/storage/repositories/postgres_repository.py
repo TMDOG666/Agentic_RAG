@@ -52,6 +52,15 @@ class PostgresGraphRepository:
 
         ddl = [
             """
+            CREATE TABLE IF NOT EXISTS grag_groups (
+                group_id TEXT NOT NULL,
+                group_name TEXT NOT NULL,
+                group_desc TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (group_id)
+            );
+            """,
+            """
             CREATE TABLE IF NOT EXISTS grag_documents (
                 group_id TEXT NOT NULL,
                 doc_id TEXT NOT NULL,
@@ -143,6 +152,373 @@ class PostgresGraphRepository:
                         )
                     except Exception:
                         pass
+        finally:
+            conn.close()
+
+
+    def list_groups(self, *, limit: int = 500) -> list[str]:
+        """列出当前 Postgres 中存在数据的 group_id 列表。"""
+        self.ensure_schema()
+
+        conn = self._client.get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT group_id
+                        FROM (
+                            SELECT DISTINCT group_id FROM grag_documents
+                            UNION
+                            SELECT DISTINCT group_id FROM grag_groups
+                        ) g
+                        ORDER BY group_id ASC
+                        LIMIT %s;
+                        """,
+                        (int(limit),),
+                    )
+                    rows = cur.fetchall()
+            return [str(r[0]) for r in rows if str(r[0] or "").strip()]
+        finally:
+            conn.close()
+
+
+    def create_group(self, *, group_id: str, group_name: str = "", group_desc: str = "", created_at: str) -> None:
+        """创建/更新 group 元信息。"""
+        if not str(group_id).strip():
+            raise ValueError("group_id is required")
+        self.ensure_schema()
+
+        conn = self._client.get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO grag_groups (group_id, group_name, group_desc, created_at)
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (group_id)
+                        DO UPDATE SET
+                            group_name = EXCLUDED.group_name,
+                            group_desc = EXCLUDED.group_desc;
+                        """,
+                        (group_id, str(group_name or ""), str(group_desc or ""), str(created_at)),
+                    )
+        finally:
+            conn.close()
+
+
+    def get_document(self, *, group_id: str, doc_id: str) -> Optional[DocumentRecord]:
+        """按 doc_id 读取文档元信息。"""
+        import json
+
+        if not str(group_id).strip():
+            raise ValueError("group_id is required")
+        if not str(doc_id).strip():
+            return None
+        self.ensure_schema()
+
+        conn = self._client.get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT doc_id, doc_name, doc_time, metadata_json
+                        FROM grag_documents
+                        WHERE group_id=%s AND doc_id=%s
+                        LIMIT 1;
+                        """,
+                        (group_id, doc_id),
+                    )
+                    row = cur.fetchone()
+            if not row:
+                return None
+
+            doc_id_v, doc_name, doc_time, metadata_json = row
+            meta = {}
+            try:
+                raw = json.loads(metadata_json or "{}")
+                if isinstance(raw, dict):
+                    meta = raw
+            except Exception:
+                meta = {}
+            return DocumentRecord(
+                group_id=str(group_id),
+                doc_id=str(doc_id_v),
+                doc_name=str(doc_name),
+                doc_time=str(doc_time),
+                metadata=meta,
+            )
+        finally:
+            conn.close()
+
+
+    def list_group_doc_ids(self, *, group_id: str, limit: int = 5000) -> list[str]:
+        if not str(group_id).strip():
+            raise ValueError("group_id is required")
+        self.ensure_schema()
+
+        conn = self._client.get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT doc_id
+                        FROM grag_documents
+                        WHERE group_id=%s
+                        ORDER BY doc_time DESC, doc_id DESC
+                        LIMIT %s;
+                        """,
+                        (group_id, int(limit)),
+                    )
+                    rows = cur.fetchall()
+            return [str(r[0]) for r in rows if str(r[0] or "").strip()]
+        finally:
+            conn.close()
+
+
+    def list_doc_chunk_ids(self, *, group_id: str, doc_id: str, limit: int = 200000) -> list[str]:
+        if not str(group_id).strip():
+            raise ValueError("group_id is required")
+        if not str(doc_id).strip():
+            return []
+        self.ensure_schema()
+
+        conn = self._client.get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT chunk_id
+                        FROM grag_chunks
+                        WHERE group_id=%s AND doc_id=%s
+                        ORDER BY chunk_index ASC
+                        LIMIT %s;
+                        """,
+                        (group_id, doc_id, int(limit)),
+                    )
+                    rows = cur.fetchall()
+            return [str(r[0]) for r in rows if str(r[0] or "").strip()]
+        finally:
+            conn.close()
+
+
+    def delete_document_assets(self, *, group_id: str, doc_id: str) -> bool:
+        """删除 Postgres 中该 doc 的所有资产（relations/entities/chunks/document）。"""
+        if not str(group_id).strip():
+            raise ValueError("group_id is required")
+        if not str(doc_id).strip():
+            return False
+        self.ensure_schema()
+
+        conn = self._client.get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "DELETE FROM grag_relations WHERE group_id=%s AND doc_id=%s",
+                        (group_id, doc_id),
+                    )
+                    cur.execute(
+                        "DELETE FROM grag_entities WHERE group_id=%s AND doc_id=%s",
+                        (group_id, doc_id),
+                    )
+                    cur.execute(
+                        "DELETE FROM grag_chunks WHERE group_id=%s AND doc_id=%s",
+                        (group_id, doc_id),
+                    )
+                    cur.execute(
+                        "DELETE FROM grag_documents WHERE group_id=%s AND doc_id=%s",
+                        (group_id, doc_id),
+                    )
+                    return bool(getattr(cur, "rowcount", 0) > 0)
+        finally:
+            conn.close()
+
+
+    def list_group_documents(
+        self,
+        *,
+        group_id: str,
+        limit: int = 200,
+        doc_time_start: Optional[str] = None,
+        doc_time_end: Optional[str] = None,
+    ) -> list[DocumentRecord]:
+        """列出 group 下文档元信息。"""
+        import json
+
+        if not str(group_id).strip():
+            raise ValueError("group_id is required")
+
+        self.ensure_schema()
+
+        where = ["group_id = %s"]
+        params: list[object] = [group_id]
+        if doc_time_start:
+            where.append("doc_time >= %s")
+            params.append(doc_time_start)
+        if doc_time_end:
+            where.append("doc_time <= %s")
+            params.append(doc_time_end)
+
+        sql = (
+            "SELECT doc_id, doc_name, doc_time, metadata_json "
+            "FROM grag_documents "
+            f"WHERE {' AND '.join(where)} "
+            "ORDER BY doc_time DESC, doc_id DESC "
+            "LIMIT %s;"
+        )
+        params.append(int(limit))
+
+        conn = self._client.get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(sql, tuple(params))
+                    rows = cur.fetchall()
+
+            out: list[DocumentRecord] = []
+            for doc_id, doc_name, doc_time, metadata_json in rows:
+                meta = {}
+                try:
+                    raw = json.loads(metadata_json or "{}")
+                    if isinstance(raw, dict):
+                        meta = raw
+                except Exception:
+                    meta = {}
+                out.append(
+                    DocumentRecord(
+                        group_id=str(group_id),
+                        doc_id=str(doc_id),
+                        doc_name=str(doc_name),
+                        doc_time=str(doc_time),
+                        metadata=meta,
+                    )
+                )
+            return out
+        finally:
+            conn.close()
+
+
+    def get_entity_by_id(self, *, group_id: str, entity_id: str) -> Optional[GraphEntityRecord]:
+        """按 entity_id 获取实体（entity_id 在 group 内唯一）。"""
+        import json
+
+        if not str(group_id).strip():
+            raise ValueError("group_id is required")
+        if not str(entity_id or "").strip():
+            return None
+
+        self.ensure_schema()
+
+        conn = self._client.get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT doc_id, entity_id, canonical_name, type, aliases_json, description
+                        FROM grag_entities
+                        WHERE group_id = %s AND entity_id = %s
+                        LIMIT 1;
+                        """,
+                        (group_id, entity_id),
+                    )
+                    row = cur.fetchone()
+            if not row:
+                return None
+
+            doc_id, entity_id_v, canonical_name, etype, aliases_json, description = row
+            aliases: list[str] = []
+            try:
+                raw = json.loads(aliases_json or "[]")
+                if isinstance(raw, list):
+                    aliases = [str(x) for x in raw if str(x).strip()]
+            except Exception:
+                aliases = []
+            return GraphEntityRecord(
+                entity_id=str(entity_id_v),
+                group_id=str(group_id),
+                doc_id=str(doc_id),
+                canonical_name=str(canonical_name),
+                type=str(etype),
+                aliases=aliases,
+                description=str(description),
+            )
+        finally:
+            conn.close()
+
+
+    def upsert_entity(self, *, entity: GraphEntityRecord) -> None:
+        """插入或更新实体。"""
+        import json
+
+        if not str(entity.group_id).strip():
+            raise ValueError("group_id is required")
+        if not str(entity.doc_id).strip():
+            raise ValueError("doc_id is required")
+        if not str(entity.entity_id).strip():
+            raise ValueError("entity_id is required")
+        if not str(entity.canonical_name).strip():
+            raise ValueError("canonical_name is required")
+
+        self.ensure_schema()
+
+        conn = self._client.get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO grag_entities (
+                            group_id, doc_id, entity_id, canonical_name, type, aliases_json, description
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (group_id, doc_id, canonical_name)
+                        DO UPDATE SET
+                            entity_id = EXCLUDED.entity_id,
+                            type = EXCLUDED.type,
+                            aliases_json = EXCLUDED.aliases_json,
+                            description = EXCLUDED.description;
+                        """,
+                        (
+                            entity.group_id,
+                            entity.doc_id,
+                            entity.entity_id,
+                            entity.canonical_name,
+                            entity.type,
+                            json.dumps(list(entity.aliases), ensure_ascii=False),
+                            entity.description,
+                        ),
+                    )
+        finally:
+            conn.close()
+
+
+    def delete_entity(self, *, group_id: str, entity_id: str) -> bool:
+        """按 entity_id 删除实体。"""
+        if not str(group_id).strip():
+            raise ValueError("group_id is required")
+        if not str(entity_id or "").strip():
+            return False
+
+        self.ensure_schema()
+
+        conn = self._client.get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        DELETE FROM grag_entities
+                        WHERE group_id = %s AND entity_id = %s;
+                        """,
+                        (group_id, entity_id),
+                    )
+                    return bool(getattr(cur, "rowcount", 0) > 0)
         finally:
             conn.close()
 

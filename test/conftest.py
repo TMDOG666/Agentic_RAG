@@ -8,6 +8,20 @@ def pytest_addoption(parser):
         default="0",
         help="Pause seconds before cleanup (for manual DB inspection). Default: 0",
     )
+
+    parser.addoption(
+        "--api-base-url",
+        action="store",
+        default="http://127.0.0.1:8080",
+        help="Base URL for the live FastAPI server used by API integration tests.",
+    )
+    parser.addoption(
+        "--api-no-cleanup",
+        action="store_true",
+        default=False,
+        help="Skip cleanup for API integration tests (leave created groups/docs).",
+    )
+
     parser.addoption(
         "--no-cleanup",
         action="store_true",

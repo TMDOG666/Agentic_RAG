@@ -169,6 +169,60 @@ class Neo4jGraphRepository:
                 session.execute_write(_run)
 
 
+    def delete_document_graph(self, *, group_id: str, doc_id: str) -> None:
+        if not str(group_id).strip():
+            raise ValueError("group_id is required")
+        if not str(doc_id).strip():
+            return
+
+        driver = self._client.get_driver()
+        db = self._get_database()
+
+        def _run(tx):
+            tx.run(
+                "MATCH (e:Entity {group_id: $group_id, doc_id: $doc_id}) DETACH DELETE e",
+                group_id=group_id,
+                doc_id=doc_id,
+            )
+            tx.run(
+                "MATCH (d:Document {group_id: $group_id, doc_id: $doc_id}) DETACH DELETE d",
+                group_id=group_id,
+                doc_id=doc_id,
+            )
+
+        if db:
+            with driver.session(database=db) as session:
+                session.execute_write(_run)
+        else:
+            with driver.session() as session:
+                session.execute_write(_run)
+
+
+    def delete_group_graph(self, *, group_id: str) -> None:
+        if not str(group_id).strip():
+            raise ValueError("group_id is required")
+
+        driver = self._client.get_driver()
+        db = self._get_database()
+
+        def _run(tx):
+            tx.run(
+                "MATCH (e:Entity {group_id: $group_id}) DETACH DELETE e",
+                group_id=group_id,
+            )
+            tx.run(
+                "MATCH (d:Document {group_id: $group_id}) DETACH DELETE d",
+                group_id=group_id,
+            )
+
+        if db:
+            with driver.session(database=db) as session:
+                session.execute_write(_run)
+        else:
+            with driver.session() as session:
+                session.execute_write(_run)
+
+
     def search_entity_subgraph(
         self,
         *,
@@ -351,6 +405,100 @@ class Neo4jGraphRepository:
             )
 
         return edges
+
+
+    def search_group_graph(
+        self,
+        *,
+        group_id: str,
+        limit: int = 200,
+        doc_id: Optional[str] = None,
+    ) -> dict:
+        """按 group 读取图谱（nodes/edges），用于 API 展示。"""
+        if not str(group_id).strip():
+            raise ValueError("group_id is required")
+
+        driver = self._client.get_driver()
+        db = self._get_database()
+
+        lim = int(limit)
+
+        where_doc_e = ""
+        where_doc_r = ""
+        if doc_id:
+            where_doc_e = "AND a.doc_id = $doc_id AND b.doc_id = $doc_id"
+            where_doc_r = "AND r.doc_id = $doc_id"
+
+        cypher = (
+            "MATCH (a:Entity {group_id: $group_id})-[r:REL {group_id: $group_id}]-(b:Entity {group_id: $group_id}) "
+            + where_doc_r
+            + " WITH a, r, b LIMIT $limit "
+            "RETURN a AS a, r AS r, b AS b"
+        )
+
+        def _run(tx):
+            return list(
+                tx.run(
+                    cypher,
+                    group_id=group_id,
+                    doc_id=doc_id,
+                    limit=lim,
+                )
+            )
+
+        if db:
+            with driver.session(database=db) as session:
+                records = session.execute_read(_run)
+        else:
+            with driver.session() as session:
+                records = session.execute_read(_run)
+
+        nodes: dict[str, dict] = {}
+        edges: list[dict] = []
+
+        def _add_node(n):
+            if n is None:
+                return
+            labels = list(n.labels)
+            key = f"{labels}:{n.get('group_id')}:{n.get('doc_id')}:{n.get('name', '')}"
+            if key in nodes:
+                return
+            nodes[key] = {
+                "labels": labels,
+                "group_id": n.get("group_id"),
+                "doc_id": n.get("doc_id"),
+                "name": n.get("name"),
+                "type": n.get("type"),
+                "description": n.get("description"),
+                "aliases": n.get("aliases"),
+                "doc_name": n.get("doc_name"),
+                "doc_time": n.get("doc_time"),
+            }
+
+        for rec in records:
+            a = rec.get("a")
+            b = rec.get("b")
+            r = rec.get("r")
+            _add_node(a)
+            _add_node(b)
+            if r is None:
+                continue
+            start = getattr(r, "start_node", None)
+            end = getattr(r, "end_node", None)
+            edges.append(
+                {
+                    "type": r.get("type") or r.type,
+                    "description": r.get("description"),
+                    "confidence": r.get("confidence"),
+                    "group_id": r.get("group_id"),
+                    "doc_id": r.get("doc_id"),
+                    "relation_id": r.get("relation_id"),
+                    "head_name": start.get("name") if start is not None else None,
+                    "tail_name": end.get("name") if end is not None else None,
+                }
+            )
+
+        return {"nodes": list(nodes.values()), "edges": edges}
 
 
     def search_entities_by_relations(

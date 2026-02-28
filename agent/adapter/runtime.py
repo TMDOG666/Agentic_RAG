@@ -15,10 +15,10 @@
 
 import os
 
-from adapter.graph import build_graph, create_system_prompt
-from llm.config import create_model, load_agent_config
-from skill.manager import SkillManager
-from tools.skill_tools import create_tools
+from agent.adapter.graph import build_graph, create_system_prompt
+from agent.llm.config import create_model, load_agent_config
+from agent.skill.manager import SkillManager
+from agent.tools.skill_tools import create_tools
 
 
 def create_runtime():

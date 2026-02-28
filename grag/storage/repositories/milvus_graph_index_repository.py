@@ -284,3 +284,31 @@ class MilvusGraphIndexRepository:
                 row["score"] = float(getattr(h, "score", 0.0))
                 out.append(row)
         return out
+
+
+    def delete_by_doc_id(self, *, group_id: str, doc_id: str) -> None:
+        pymilvus = self._ensure_pymilvus()
+        self._client.connect()
+        if not pymilvus.utility.has_collection(self._collection_name, using=self._client._alias):
+            return
+        if not str(group_id).strip() or not str(doc_id).strip():
+            return
+
+        col = pymilvus.Collection(name=self._collection_name, using=self._client._alias)
+        expr = f'group_id == "{group_id}" and doc_id == "{doc_id}"'
+        col.delete(expr)
+        col.flush()
+
+
+    def delete_by_group_id(self, *, group_id: str) -> None:
+        pymilvus = self._ensure_pymilvus()
+        self._client.connect()
+        if not pymilvus.utility.has_collection(self._collection_name, using=self._client._alias):
+            return
+        if not str(group_id).strip():
+            return
+
+        col = pymilvus.Collection(name=self._collection_name, using=self._client._alias)
+        expr = f'group_id == "{group_id}"'
+        col.delete(expr)
+        col.flush()
