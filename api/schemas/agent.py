@@ -17,6 +17,12 @@ from pydantic import BaseModel
 class AgentRunIn(BaseModel):
     """Agent 运行入参。"""
 
+    # 可选：RAG 上下文注入。
+    # 说明：这两个字段用于让 agent 知道当前应使用哪个组/文档做检索。
+    # 它们将由 API 层拼接进 prompt（而不是让用户在自然语言里重复）。
+    group_id: Optional[str] = None
+    doc_id: Optional[str] = None
+
     # 用户输入的自然语言。
     user_text: str
 

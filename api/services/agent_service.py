@@ -29,9 +29,20 @@ class AgentService:
             AgentRunOut: agent 的输出文本。
         """
         # user_text 是用户输入；prefix 可用于在 API 层注入额外上下文（例如 system 指令/业务约束）。
+        # group_id/doc_id 也在这里注入，以避免用户在自然语言里重复。
+        injected_lines: list[str] = []
+        if payload.group_id:
+            injected_lines.append(f"[RAG_CONTEXT] group_id={payload.group_id}")
+        if payload.doc_id:
+            injected_lines.append(f"[RAG_CONTEXT] doc_id={payload.doc_id}")
+
+        injected_prefix = "\n".join(injected_lines).strip()
+
         text = payload.user_text
         if payload.prefix:
             text = f"{payload.prefix}\n{text}"
+        if injected_prefix:
+            text = f"{injected_prefix}\n{text}"
 
         # run_once 会返回 agent 的最终答复；此处强转为 str，保证 schema 稳定。
         reply = run_once(text)
