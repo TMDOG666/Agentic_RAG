@@ -39,7 +39,24 @@ class SkillManager:
     """
  
     def __init__(self, skills_dir: str = ".cursor/skills"):
-        self.skills_dir = Path(skills_dir)
+        def _has_any_skill_md(base: Path) -> bool:
+            try:
+                return any(p.is_file() for p in base.glob("*/SKILL.md"))
+            except Exception:
+                return False
+
+        skills_path = Path(skills_dir)
+        if str(skills_dir) == ".cursor/skills":
+            repo_root = Path(__file__).resolve().parents[2]
+            fallback = repo_root / "agent" / ".cursor" / "skills"
+
+            # 1) 默认路径不存在：直接 fallback。
+            # 2) 默认路径存在但为空（无任何 SKILL.md）：也 fallback（避免 repo 根目录误创建空 .cursor/skills 时失效）。
+            if (not skills_path.exists()) or (skills_path.exists() and not _has_any_skill_md(skills_path)):
+                if fallback.exists() and _has_any_skill_md(fallback):
+                    skills_path = fallback
+
+        self.skills_dir = skills_path
         self.skills_metadata: Dict[str, dict] = {}
  
         # SkillsRegistry：用于持久化缓存 skills 元数据（name/description + 变更检测字段）。

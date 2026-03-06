@@ -132,7 +132,7 @@
  
  ## 🚀 快速开始
  
- ### 1) 安装依赖
+### 1) 安装依赖
  
  按你本机环境选择（conda/venv 均可）。以下仅示例：
  
@@ -141,8 +141,49 @@
  ```
  
  如果你的 skills 脚本需要 `pandas` 等依赖，请按需安装。
- 
- ### 2) 配置模型 Provider
+
+### 2) 启动后端（FastAPI）
+
+本项目 API 入口为 `api/main.py`，可用 `uvicorn` 启动：
+
+```bash
+pip install -r requirements.txt
+uvicorn api.main:app --host 0.0.0.0 --port 8080 --reload
+```
+
+启动后可访问：
+
+- `http://127.0.0.1:8080/docs`（Swagger UI）
+
+> 说明：端口可自行调整；下方 WebUI 默认代理到 `8080`。
+
+### 3) 启动前端（WebUI / Vue）
+
+前端代码位于 `webui/`，基于 Vue3 + Vite + Element Plus。
+
+```bash
+cd webui
+npm i
+npm run dev
+```
+
+开发环境下：
+
+- 浏览器打开 Vite 地址（默认 `http://127.0.0.1:5173`）
+- 前端会将 `/api/*` 代理到 `http://127.0.0.1:8080`（见 `webui/vite.config.js`）
+
+如果你的后端不在 8080，可在启动前端时指定代理目标：
+
+```bash
+# Windows PowerShell
+$env:VITE_DEV_PROXY_TARGET='http://127.0.0.1:8000'; npm run dev
+```
+
+生产/预览模式可通过环境变量指定 API 地址（见 `webui/.env.example`）：
+
+- `VITE_API_BASE_URL=http://127.0.0.1:8080`
+
+### 4) 配置模型 Provider
  
  - 编辑 `agent_config.yaml` 选择 provider
  - 设置 API Key（示例以 siliconflow 为例）：
@@ -152,7 +193,7 @@
  $env:SILICONFLOW_API_KEY="your_api_key_here"
  ```
  
- ### 3) 运行
+ ### 5) 运行
  
  ```bash
  python agent_with_skills.py

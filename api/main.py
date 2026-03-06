@@ -17,6 +17,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.controllers.router import api_router
+from agent.skill.manager import SkillManager
 
 
 def create_app() -> FastAPI:
@@ -38,6 +39,13 @@ def create_app() -> FastAPI:
 
     # 挂载所有 API 子路由（controllers/router.py 中统一注册）。
     app.include_router(api_router)
+
+    @app.on_event("startup")
+    def _startup() -> None:
+        # 预热 skills 扫描：确保服务启动时就能发现并缓存 Skills 元数据。
+        # 注意：这里不强制初始化 LLM runtime（避免无 API Key 时启动失败）；仅做 skills 目录扫描。
+        SkillManager()
+
     return app
 
 

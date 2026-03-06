@@ -5,3 +5,4 @@ __pycache__
 /data/
 test/grag/graph_construction/test_data/
 test/grag/preprocessing/test_data/
+webui/node_modules
