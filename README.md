@@ -130,7 +130,19 @@
  
  ---
  
- ## 🚀 快速开始
+ ## 🆕 本分支最新更新（WebUI + API 联调）
+
+- **新增 WebUI（Vue3 + Vite + Element Plus）**：位于 `webui/`，提供侧边栏布局 + 路由。
+- **分组/详情页打通**：分组列表、组详情三页（文档、图谱、Agent）联调 API。
+- **文档上传**：WebUI 文档页支持 `POST /ingest/upload`（multipart/form-data）。
+- **图谱可视化与节点点击编辑**：图谱页使用 `vis-network` 展示 `GET /groups/{group_id}/graph`，点击节点尝试按 `entity_id` 打开 entities 编辑弹窗。
+- **UI 增强**：面包屑、亮/暗色切换、Axios 全局错误提示拦截器。
+- **Skills 启动预热**：FastAPI 启动时预加载 `SkillManager()` 扫描 skills 元数据；并修复当仓库根目录 `.cursor/skills` 为空时自动 fallback 到 `agent/.cursor/skills`。
+- **提示词修复**：system prompt 明确禁止在输出文本中伪造 `<tool_call>...</tool_call>`，避免出现“说要检索但不执行工具”的卡住现象。
+
+> 开发提示：建议将 `webui/node_modules` 加入 `.gitignore`（避免误提交）。
+
+## 🚀 快速开始
  
 ### 1) 安装依赖
  
