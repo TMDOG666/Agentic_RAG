@@ -46,20 +46,35 @@
 
     <el-dialog v-model="uploadDlg" title="上传文件并入库" width="720px">
       <el-form label-width="90px">
-        <el-form-item label="doc_id">
-          <el-input v-model="uploadForm.doc_id" placeholder="可选：不填则创建新文档；填则尝试用该 doc_id 重建" />
+        <el-form-item label="文档ID">
+          <el-input v-model="uploadForm.doc_id" placeholder="可选：不填则创建新文档；填则尝试用该文档ID重建" />
         </el-form-item>
-        <el-form-item label="doc_time">
-          <el-input v-model="uploadForm.doc_time" placeholder="建议 ISO8601，例如 2026-03-05T07:12:34Z" />
+        <el-form-item label="文档时间">
+          <el-date-picker
+            v-model="uploadForm.doc_time"
+            type="datetime"
+            placeholder="请选择时间"
+            style="width: 100%"
+          />
         </el-form-item>
-        <el-form-item label="standardize">
+        <el-form-item label="标准化">
           <el-switch v-model="uploadForm.standardize" />
         </el-form-item>
-        <el-form-item label="file">
-          <input type="file" @change="onFileChange" />
-          <div v-if="uploadForm.filename" style="font-size: 12px; opacity: 0.75; margin-top: 6px">
-            {{ uploadForm.filename }}
-          </div>
+        <el-form-item label="文件">
+          <el-upload
+            drag
+            :auto-upload="false"
+            :limit="1"
+            :on-change="onUploadChange"
+            :on-remove="onUploadRemove"
+            :show-file-list="true"
+            style="width: 100%"
+          >
+            <div style="padding: 14px 0">
+              <div style="font-weight: 600">拖拽文件到此处</div>
+              <div style="font-size: 12px; opacity: 0.75; margin-top: 6px">或点击选择文件</div>
+            </div>
+          </el-upload>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -95,7 +110,7 @@ const form = reactive({
 const uploading = ref(false)
 const uploadForm = reactive({
   doc_id: '',
-  doc_time: '',
+  doc_time: null,
   standardize: true,
   file: null,
   filename: '',
@@ -114,17 +129,22 @@ async function load() {
 
 function openUpload() {
   uploadForm.doc_id = ''
-  uploadForm.doc_time = ''
+  uploadForm.doc_time = null
   uploadForm.standardize = true
   uploadForm.file = null
   uploadForm.filename = ''
   uploadDlg.value = true
 }
 
-function onFileChange(e) {
-  const f = e?.target?.files?.[0]
-  uploadForm.file = f || null
-  uploadForm.filename = f?.name || ''
+function onUploadChange(uploadFile) {
+  const raw = uploadFile?.raw
+  uploadForm.file = raw || null
+  uploadForm.filename = raw?.name || uploadFile?.name || ''
+}
+
+function onUploadRemove() {
+  uploadForm.file = null
+  uploadForm.filename = ''
 }
 
 async function upload() {
@@ -132,8 +152,19 @@ async function upload() {
     ElMessage.warning('请选择文件')
     return
   }
-  if (!String(uploadForm.doc_time || '').trim()) {
-    ElMessage.warning('doc_time 不能为空')
+  if (!uploadForm.doc_time) {
+    ElMessage.warning('文档时间不能为空')
+    return
+  }
+
+  let docTimeIso = ''
+  try {
+    docTimeIso = new Date(uploadForm.doc_time).toISOString()
+  } catch {
+    docTimeIso = ''
+  }
+  if (!docTimeIso) {
+    ElMessage.warning('文档时间格式不合法')
     return
   }
 
@@ -144,7 +175,7 @@ async function upload() {
 
     const params = {
       group_id: props.groupId,
-      doc_time: String(uploadForm.doc_time || '').trim(),
+      doc_time: docTimeIso,
       doc_id: String(uploadForm.doc_id || '').trim() || undefined,
       standardize: Boolean(uploadForm.standardize),
     }

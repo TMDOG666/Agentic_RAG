@@ -104,9 +104,25 @@ const form = reactive({
 })
 
 function _graphToFlow(g) {
-  const ns = (g?.nodes || []).map((n, idx) => {
-    const id = String(n.entity_id ?? n.id ?? n.node_id ?? idx)
-    const label = String(n.label ?? n.name ?? n.canonical_name ?? id)
+  const nodesIn = Array.isArray(g?.nodes) ? g.nodes : []
+  const edgesIn = Array.isArray(g?.edges) ? g.edges : []
+
+  const nameToId = new Map()
+  const usedNodeIds = new Set()
+  const ns = nodesIn.map((n, idx) => {
+    const name = String(n?.name ?? n?.canonical_name ?? '').trim()
+    const doc = String(n?.doc_id ?? '').trim()
+    const rawId = String(n?.entity_id ?? n?.id ?? n?.node_id ?? '').trim()
+    const baseId = rawId || (name ? `${doc || '_'}:${name}` : String(idx))
+    let id = baseId
+    let bump = 2
+    while (usedNodeIds.has(id)) {
+      id = `${baseId}#${bump}`
+      bump += 1
+    }
+    usedNodeIds.add(id)
+    if (name && !nameToId.has(name)) nameToId.set(name, id)
+    const label = String(n?.label ?? (name || n?.canonical_name) ?? id)
     return {
       id,
       label,
@@ -116,19 +132,32 @@ function _graphToFlow(g) {
     }
   })
 
-  const es = (g?.edges || []).map((e, idx) => {
-    const from = String(e.source ?? e.from ?? e.start ?? '')
-    const to = String(e.target ?? e.to ?? e.end ?? '')
-    const label = String(e.label ?? e.type ?? '')
-    return {
-      id: String(e.id ?? `${from}-${to}-${idx}`),
-      from,
-      to,
-      label,
-      arrows: 'to',
-      font: { align: 'middle', size: 10 },
-    }
-  })
+  const usedEdgeIds = new Set()
+  const es = edgesIn
+    .map((e, idx) => {
+      const headName = String(e?.head_name ?? '').trim()
+      const tailName = String(e?.tail_name ?? '').trim()
+      const from = String(e?.source ?? e?.from ?? e?.start ?? nameToId.get(headName) ?? headName ?? '').trim()
+      const to = String(e?.target ?? e?.to ?? e?.end ?? nameToId.get(tailName) ?? tailName ?? '').trim()
+      const label = String(e?.label ?? e?.type ?? '')
+      const baseEdgeId = String(e?.id ?? e?.relation_id ?? `${from}-${to}-${idx}`)
+      let id = baseEdgeId
+      let bump = 2
+      while (usedEdgeIds.has(id)) {
+        id = `${baseEdgeId}#${bump}`
+        bump += 1
+      }
+      usedEdgeIds.add(id)
+      return {
+        id,
+        from,
+        to,
+        label,
+        arrows: 'to',
+        font: { align: 'middle', size: 10 },
+      }
+    })
+    .filter((e) => e.from && e.to)
 
   return { ns, es }
 }
@@ -176,10 +205,20 @@ async function loadGraph() {
 
     await nextTick()
     _ensureNetwork()
+
+    if (!ns.length) {
+      ElMessage.warning('图谱为空：未返回任何节点（nodes=0）')
+    } else {
+      ElMessage.info(`图谱数据：nodes=${ns.length}, edges=${es.length}`)
+    }
+
     if (network) {
       network.setData({ nodes: ns, edges: es })
       network.fit({ animation: { duration: 300 } })
     }
+  } catch (e) {
+    const msg = e?.response?.data?.detail || e?.message || '加载图谱失败'
+    ElMessage.error(String(msg))
   } finally {
     graphLoading.value = false
   }

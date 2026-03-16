@@ -23,7 +23,7 @@ providers:
   # - api_key_env 指向你本机/CI 环境变量中的 key
   # --------------------------------------------------------------------------
   siliconflow:
-    model: Qwen/Qwen3-Next-80B-A3B-Instruct
+    model: Qwen/Qwen3.5-35B-A3B
     base_url: https://api.siliconflow.cn/v1
     api_key_env: SILICONFLOW_API_KEY
     temperature: 0
