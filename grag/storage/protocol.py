@@ -6,13 +6,26 @@ from .types import (
     ChunkEmbeddingRecord,
     ChunkRecord,
     DocumentRecord,
+    EntityMentionRecord,
+    EntityAlignmentRecord,
+    GlobalRelationRecord,
     GraphEntityRecord,
     GraphIndexRecord,
     GraphRelationRecord,
+    GlobalEntityRecord,
+    IngestTaskRecord,
+    RelationMentionRecord,
+    RelationAlignmentRecord,
 )
 
 
 class GraphStorage(Protocol):
+    def list_group_global_entities(self, *, group_id: str, limit: int = 500) -> Sequence[GlobalEntityRecord]:
+        ...
+
+    def list_group_global_relations(self, *, group_id: str, limit: int = 500) -> Sequence[GlobalRelationRecord]:
+        ...
+
     def list_group_entities(self, *, group_id: str, limit: int = 500) -> Sequence[GraphEntityRecord]:
         """列出同一 group 下历史文档中已入库的实体。
 
@@ -25,6 +38,15 @@ class GraphStorage(Protocol):
         """
         ...
 
+    def save_base_document(
+        self,
+        *,
+        document: DocumentRecord,
+        chunks: Sequence[ChunkRecord],
+        embeddings: Sequence[ChunkEmbeddingRecord],
+    ) -> None:
+        ...
+
     def save_document(
         self,
         *,
@@ -33,6 +55,31 @@ class GraphStorage(Protocol):
         embeddings: Sequence[ChunkEmbeddingRecord],
         entities: Sequence[GraphEntityRecord],
         relations: Sequence[GraphRelationRecord],
+        entity_mentions: Sequence[EntityMentionRecord],
+        relation_mentions: Sequence[RelationMentionRecord],
+        global_entities: Sequence[GlobalEntityRecord],
+        entity_alignments: Sequence[EntityAlignmentRecord],
+        global_relations: Sequence[GlobalRelationRecord],
+        relation_alignments: Sequence[RelationAlignmentRecord],
         graph_index_records: Sequence[GraphIndexRecord],
     ) -> None:
+        ...
+
+    def save_graph_assets(
+        self,
+        *,
+        document: DocumentRecord,
+        entities: Sequence[GraphEntityRecord],
+        relations: Sequence[GraphRelationRecord],
+        entity_mentions: Sequence[EntityMentionRecord],
+        relation_mentions: Sequence[RelationMentionRecord],
+        global_entities: Sequence[GlobalEntityRecord],
+        entity_alignments: Sequence[EntityAlignmentRecord],
+        global_relations: Sequence[GlobalRelationRecord],
+        relation_alignments: Sequence[RelationAlignmentRecord],
+        graph_index_records: Sequence[GraphIndexRecord],
+    ) -> None:
+        ...
+
+    def upsert_ingest_task(self, *, task: IngestTaskRecord) -> None:
         ...

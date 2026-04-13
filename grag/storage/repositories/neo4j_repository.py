@@ -4,85 +4,13 @@ from typing import Optional, Sequence
 
 from grag.data_client.neo4j_client import Neo4jClient
 
-from ..types import DocumentRecord, GraphEntityRecord, GraphRelationRecord
-
-
-"""grag.storage.repositories.neo4j_repository
-
-Neo4j 图存储仓储层（Repository）。
-
-定位：
-- 本模块只负责将“融合后的实体/关系”写入图数据库（Neo4j）。
-- 不负责关系型元信息（Postgres）与向量（Milvus）。
-
-图模型约定（最小可用）：
-- (:Document {group_id, doc_id})
-  - 属性：doc_name/doc_time
-
-- (:Entity {group_id, doc_id, name})
-  - 属性：type/description/aliases
-  - 说明：这里的 `name` 是 canonical_name（融合后的标准实体名）
-
-- 关系：
-  - (s:Entity)-[:REL {group_id, doc_id, type, description, confidence}]->(o:Entity)
-  - 说明：这里的 `type` 是 relation_type（例如 friend/owns/located_in 等）
-
-幂等策略：
-- 节点使用 MERGE 确保幂等。
-- 关系同样使用 MERGE，但当前 MERGE key 包含 (group_id, doc_id, type, description)，
-  因此对“同一对实体”存在多条不同描述的关系时会产生多条边；这是有意的最小实现。
-"""
+from ..types import DocumentRecord, GlobalEntityRecord, GlobalRelationRecord, GraphEntityRecord, GraphRelationRecord
 
 
 class Neo4jGraphRepository:
-    """Neo4j 图谱落库仓储。
-
-    依赖：
-    - `Neo4jClient` 负责读取配置与创建 driver
-
-    事务语义：
-    - 使用 `session.execute_write`，保证写入在单个写事务中执行。
-
-    注意：
-    - 当前实现假设 relations 的 subject/object 对应的实体在同一次写入中已 MERGE。
-      如果 relations 指向不存在的实体名，将导致 MATCH 为空从而不创建边。
-    """
-
     def __init__(self, client: Neo4jClient) -> None:
         self._client = client
         self._constraints_initialized = False
-
-    def ensure_constraints(self) -> None:
-        """确保必要的约束存在。
-
-        说明：
-        - 这里仅作为开发期辅助；生产建议使用 migrations 管理。
-        - 当前方法未在 upsert_graph 内部强制调用（由上层决定何时执行）。
-        """
-        if self._constraints_initialized:
-            return
-
-        driver = self._client.get_driver()
-        db = self._get_database()
-
-        def _run(session):
-            try:
-                session.run(
-                    "CREATE CONSTRAINT grag_entity_key IF NOT EXISTS FOR (e:Entity) REQUIRE (e.group_id, e.doc_id, e.name) IS UNIQUE"
-                )
-            except Exception:
-                session.run(
-                    "CREATE CONSTRAINT grag_entity_key IF NOT EXISTS ON (e:Entity) ASSERT (e.group_id, e.doc_id, e.name) IS UNIQUE"
-                )
-
-        if db:
-            with driver.session(database=db) as session:
-                _run(session)
-        else:
-            with driver.session() as session:
-                _run(session)
-
-        self._constraints_initialized = True
 
     def _get_database(self):
         try:
@@ -90,35 +18,41 @@ class Neo4jGraphRepository:
         except Exception:
             return None
 
+    def ensure_constraints(self) -> None:
+        if self._constraints_initialized:
+            return
+        driver = self._client.get_driver()
+        db = self._get_database()
+
+        def _run(session):
+            statements = [
+                "CREATE CONSTRAINT grag_entity_key IF NOT EXISTS FOR (e:Entity) REQUIRE (e.group_id, e.doc_id, e.name) IS UNIQUE",
+                "CREATE CONSTRAINT grag_global_entity_key IF NOT EXISTS FOR (e:GlobalEntity) REQUIRE (e.group_id, e.name) IS UNIQUE",
+            ]
+            for stmt in statements:
+                try:
+                    session.run(stmt)
+                except Exception:
+                    pass
+
+        if db:
+            with driver.session(database=db) as session:
+                _run(session)
+        else:
+            with driver.session() as session:
+                _run(session)
+        self._constraints_initialized = True
+
     def upsert_graph(
         self,
         *,
         document: DocumentRecord,
         entities: Sequence[GraphEntityRecord],
         relations: Sequence[GraphRelationRecord],
+        global_entities: Sequence[GlobalEntityRecord] = (),
+        global_relations: Sequence[GlobalRelationRecord] = (),
     ) -> None:
-        """将文档、实体、关系写入 Neo4j。
-
-        Args:
-            document:
-                文档节点信息。
-
-            entities:
-                canonical entities（融合后的标准实体）。
-
-            relations:
-                rewritten relations（subject/object 已 canonical 化）。
-
-        副作用：
-        - MERGE Document 节点
-        - MERGE Entity 节点
-        - MERGE Entity->Entity 关系
-
-        失败语义：
-        - driver/session/tx 执行异常将向上抛出。
-        """
         self.ensure_constraints()
-
         driver = self._client.get_driver()
         db = self._get_database()
 
@@ -161,6 +95,33 @@ class Neo4jGraphRepository:
                     c=r.confidence,
                 )
 
+            for e in global_entities:
+                tx.run(
+                    "MERGE (n:GlobalEntity {group_id: $group_id, name: $name}) "
+                    "SET n.global_entity_id=$global_entity_id, n.type=$type, n.description=$description, n.aliases=$aliases",
+                    group_id=e.group_id,
+                    name=e.canonical_name,
+                    global_entity_id=e.global_entity_id,
+                    type=e.type,
+                    description=e.description,
+                    aliases=list(e.aliases),
+                )
+
+            for r in global_relations:
+                tx.run(
+                    "MATCH (s:GlobalEntity {group_id: $group_id, name: $s}) "
+                    "MATCH (o:GlobalEntity {group_id: $group_id, name: $o}) "
+                    "MERGE (s)-[rel:GREL {group_id: $group_id, global_relation_id: $rid}]->(o) "
+                    "SET rel.type=$t, rel.description=$d, rel.confidence=$c",
+                    group_id=r.group_id,
+                    s=r.subject_name,
+                    o=r.object_name,
+                    rid=r.global_relation_id,
+                    t=r.relation_type,
+                    d=r.description,
+                    c=r.confidence,
+                )
+
         if db:
             with driver.session(database=db) as session:
                 session.execute_write(_run)
@@ -168,27 +129,15 @@ class Neo4jGraphRepository:
             with driver.session() as session:
                 session.execute_write(_run)
 
-
     def delete_document_graph(self, *, group_id: str, doc_id: str) -> None:
-        if not str(group_id).strip():
-            raise ValueError("group_id is required")
-        if not str(doc_id).strip():
+        if not str(group_id).strip() or not str(doc_id).strip():
             return
-
         driver = self._client.get_driver()
         db = self._get_database()
 
         def _run(tx):
-            tx.run(
-                "MATCH (e:Entity {group_id: $group_id, doc_id: $doc_id}) DETACH DELETE e",
-                group_id=group_id,
-                doc_id=doc_id,
-            )
-            tx.run(
-                "MATCH (d:Document {group_id: $group_id, doc_id: $doc_id}) DETACH DELETE d",
-                group_id=group_id,
-                doc_id=doc_id,
-            )
+            tx.run("MATCH (e:Entity {group_id: $group_id, doc_id: $doc_id}) DETACH DELETE e", group_id=group_id, doc_id=doc_id)
+            tx.run("MATCH (d:Document {group_id: $group_id, doc_id: $doc_id}) DETACH DELETE d", group_id=group_id, doc_id=doc_id)
 
         if db:
             with driver.session(database=db) as session:
@@ -196,24 +145,17 @@ class Neo4jGraphRepository:
         else:
             with driver.session() as session:
                 session.execute_write(_run)
-
 
     def delete_group_graph(self, *, group_id: str) -> None:
         if not str(group_id).strip():
-            raise ValueError("group_id is required")
-
+            return
         driver = self._client.get_driver()
         db = self._get_database()
 
         def _run(tx):
-            tx.run(
-                "MATCH (e:Entity {group_id: $group_id}) DETACH DELETE e",
-                group_id=group_id,
-            )
-            tx.run(
-                "MATCH (d:Document {group_id: $group_id}) DETACH DELETE d",
-                group_id=group_id,
-            )
+            tx.run("MATCH (e:Entity {group_id: $group_id}) DETACH DELETE e", group_id=group_id)
+            tx.run("MATCH (d:Document {group_id: $group_id}) DETACH DELETE d", group_id=group_id)
+            tx.run("MATCH (e:GlobalEntity {group_id: $group_id}) DETACH DELETE e", group_id=group_id)
 
         if db:
             with driver.session(database=db) as session:
@@ -222,6 +164,47 @@ class Neo4jGraphRepository:
             with driver.session() as session:
                 session.execute_write(_run)
 
+    def _search_entity_subgraph_doc(self, *, group_id: str, entity_name: str, max_depth: int, limit: int, doc_id: Optional[str]) -> dict:
+        driver = self._client.get_driver()
+        db = self._get_database()
+        where_doc = "AND e.doc_id = $doc_id" if doc_id else ""
+        cypher = (
+            "MATCH (e:Entity {group_id: $group_id}) "
+            "WHERE (e.name = $name OR $name IN e.aliases) "
+            + where_doc
+            + f" WITH e LIMIT 20 MATCH p=(e)-[r:REL*1..{max(1, int(max_depth))}]-(x) RETURN p LIMIT $limit"
+        )
+
+        def _run(tx):
+            return list(tx.run(cypher, group_id=group_id, name=entity_name, doc_id=doc_id, limit=int(limit)))
+
+        if db:
+            with driver.session(database=db) as session:
+                records = session.execute_read(_run)
+        else:
+            with driver.session() as session:
+                records = session.execute_read(_run)
+        return self._paths_to_subgraph(records)
+
+    def _search_entity_subgraph_global(self, *, group_id: str, entity_name: str, max_depth: int, limit: int) -> dict:
+        driver = self._client.get_driver()
+        db = self._get_database()
+        cypher = (
+            "MATCH (e:GlobalEntity {group_id: $group_id}) "
+            "WHERE (e.name = $name OR $name IN e.aliases) "
+            + f"WITH e LIMIT 20 MATCH p=(e)-[r:GREL*1..{max(1, int(max_depth))}]-(x) RETURN p LIMIT $limit"
+        )
+
+        def _run(tx):
+            return list(tx.run(cypher, group_id=group_id, name=entity_name, limit=int(limit)))
+
+        if db:
+            with driver.session(database=db) as session:
+                records = session.execute_read(_run)
+        else:
+            with driver.session() as session:
+                records = session.execute_read(_run)
+        return self._paths_to_subgraph(records)
 
     def search_entity_subgraph(
         self,
@@ -232,50 +215,76 @@ class Neo4jGraphRepository:
         limit: int = 50,
         doc_id: Optional[str] = None,
     ) -> dict:
-        """按实体名/别名检索，并扩展一定跳数的关系子图。
+        if not str(group_id).strip() or not str(entity_name or "").strip():
+            return {"nodes": [], "edges": []}
+        if doc_id:
+            return self._search_entity_subgraph_doc(group_id=group_id, entity_name=entity_name, max_depth=max_depth, limit=limit, doc_id=doc_id)
+        return self._search_entity_subgraph_global(group_id=group_id, entity_name=entity_name, max_depth=max_depth, limit=limit)
 
-        返回：
-        - nodes: Document/Entity 节点列表（仅包含常用字段）
-        - edges: 关系边列表
-
-        说明：
-        - 本项目实体节点是 doc 级（包含 doc_id），因此默认会在同一个 doc 内扩展。
-        - 如果你希望跨 doc 扩展，需要引入全局实体或跨文档对齐关系；当前先做最小可用。
-        """
+    def search_relations_by_entities(
+        self,
+        *,
+        group_id: str,
+        entity_names: Sequence[str],
+        limit: int = 200,
+        doc_id: Optional[str] = None,
+    ) -> list[dict]:
         if not str(group_id).strip():
             raise ValueError("group_id is required")
-        if not str(entity_name or "").strip():
-            return {"nodes": [], "edges": []}
-
+        names = [str(x or "").strip() for x in entity_names or [] if str(x or "").strip()]
+        if not names:
+            return []
         driver = self._client.get_driver()
         db = self._get_database()
 
-        depth = max(1, int(max_depth))
-        lim = int(limit)
-
-        where_doc = ""
         if doc_id:
-            where_doc = "AND e.doc_id = $doc_id"
-
-        cypher = (
-            "MATCH (e:Entity {group_id: $group_id}) "
-            "WHERE (e.name = $name OR $name IN e.aliases) "
-            + where_doc
-            + " WITH e LIMIT 20 "
-            f"MATCH p=(e)-[r:REL*1..{depth}]-(x) "
-            "RETURN p LIMIT $limit"
-        )
+            cypher = (
+                "UNWIND $names AS name "
+                "MATCH (e:Entity {group_id: $group_id, doc_id: $doc_id}) "
+                "WHERE (e.name = name OR name IN e.aliases) "
+                "WITH DISTINCT e MATCH (e)-[r:REL]-(x) RETURN DISTINCT r LIMIT $limit"
+            )
+            params = {"group_id": group_id, "doc_id": doc_id, "names": names, "limit": int(limit)}
+        else:
+            cypher = (
+                "UNWIND $names AS name "
+                "MATCH (e:GlobalEntity {group_id: $group_id}) "
+                "WHERE (e.name = name OR name IN e.aliases) "
+                "WITH DISTINCT e MATCH (e)-[r:GREL]-(x) RETURN DISTINCT r LIMIT $limit"
+            )
+            params = {"group_id": group_id, "names": names, "limit": int(limit)}
 
         def _run(tx):
-            return list(
-                tx.run(
-                    cypher,
-                    group_id=group_id,
-                    name=entity_name,
-                    doc_id=doc_id,
-                    limit=lim,
-                )
+            return list(tx.run(cypher, **params))
+
+        if db:
+            with driver.session(database=db) as session:
+                records = session.execute_read(_run)
+        else:
+            with driver.session() as session:
+                records = session.execute_read(_run)
+        return self._records_to_edges(records)
+
+    def search_group_graph(self, *, group_id: str, limit: int = 200, doc_id: Optional[str] = None) -> dict:
+        if not str(group_id).strip():
+            raise ValueError("group_id is required")
+        driver = self._client.get_driver()
+        db = self._get_database()
+        if doc_id:
+            cypher = (
+                "MATCH (a:Entity {group_id: $group_id, doc_id: $doc_id})-[r:REL {group_id: $group_id, doc_id: $doc_id}]-(b:Entity {group_id: $group_id, doc_id: $doc_id}) "
+                "WITH a, r, b LIMIT $limit RETURN a AS a, r AS r, b AS b"
             )
+            params = {"group_id": group_id, "doc_id": doc_id, "limit": int(limit)}
+        else:
+            cypher = (
+                "MATCH (a:GlobalEntity {group_id: $group_id})-[r:GREL {group_id: $group_id}]-(b:GlobalEntity {group_id: $group_id}) "
+                "WITH a, r, b LIMIT $limit RETURN a AS a, r AS r, b AS b"
+            )
+            params = {"group_id": group_id, "limit": int(limit)}
+
+        def _run(tx):
+            return list(tx.run(cypher, **params))
 
         if db:
             with driver.session(database=db) as session:
@@ -286,7 +295,127 @@ class Neo4jGraphRepository:
 
         nodes: dict[str, dict] = {}
         edges: list[dict] = []
+        for rec in records:
+            for key in ("a", "b"):
+                n = rec.get(key)
+                if n is None:
+                    continue
+                labels = list(n.labels)
+                node_key = f"{labels}:{n.get('group_id')}:{n.get('doc_id')}:{n.get('name', '')}"
+                nodes.setdefault(
+                    node_key,
+                    {
+                        "labels": labels,
+                        "group_id": n.get("group_id"),
+                        "doc_id": n.get("doc_id"),
+                        "name": n.get("name"),
+                        "type": n.get("type"),
+                        "description": n.get("description"),
+                        "aliases": n.get("aliases"),
+                    },
+                )
+            r = rec.get("r")
+            if r is None:
+                continue
+            start = getattr(r, "start_node", None)
+            end = getattr(r, "end_node", None)
+            edges.append(
+                {
+                    "type": r.get("type") or r.type,
+                    "description": r.get("description"),
+                    "confidence": r.get("confidence"),
+                    "group_id": r.get("group_id"),
+                    "doc_id": r.get("doc_id"),
+                    "relation_id": r.get("relation_id") or r.get("global_relation_id"),
+                    "head_name": start.get("name") if start is not None else None,
+                    "tail_name": end.get("name") if end is not None else None,
+                }
+            )
+        return {"nodes": list(nodes.values()), "edges": edges}
 
+    def search_entities_by_relations(
+        self,
+        *,
+        group_id: str,
+        relation_ids: Sequence[str],
+        relation_triples: Sequence[dict],
+        limit: int = 200,
+        doc_id: Optional[str] = None,
+    ) -> list[dict]:
+        if not str(group_id).strip():
+            raise ValueError("group_id is required")
+        rids = [str(x or "").strip() for x in relation_ids or [] if str(x or "").strip()]
+        triples = []
+        for t in relation_triples or []:
+            if not isinstance(t, dict):
+                continue
+            head = str(t.get("head_name") or "").strip()
+            tail = str(t.get("tail_name") or "").strip()
+            rel_type = str(t.get("relation_type") or t.get("type") or "").strip()
+            if head and tail:
+                triples.append({"head": head, "tail": tail, "rel_type": rel_type})
+        if not rids and not triples:
+            return []
+        driver = self._client.get_driver()
+        db = self._get_database()
+
+        if doc_id:
+            rid_key = "relation_id"
+            label = "Entity"
+            rel_label = "REL"
+            node_doc_filter = "{group_id: $group_id, doc_id: $doc_id}"
+            rel_doc_filter = "{group_id: $group_id, doc_id: $doc_id"
+            extra_params = {"doc_id": doc_id}
+        else:
+            rid_key = "global_relation_id"
+            label = "GlobalEntity"
+            rel_label = "GREL"
+            node_doc_filter = "{group_id: $group_id}"
+            rel_doc_filter = "{group_id: $group_id"
+            extra_params = {}
+
+        if rids:
+            cypher = (
+                f"UNWIND $relation_ids AS rid MATCH (a:{label} {node_doc_filter})-[r:{rel_label} {{group_id: $group_id, {rid_key}: rid}}]-(b:{label} {node_doc_filter}) "
+                "RETURN DISTINCT a AS n UNION "
+                f"UNWIND $relation_ids AS rid MATCH (a:{label} {node_doc_filter})-[r:{rel_label} {{group_id: $group_id, {rid_key}: rid}}]-(b:{label} {node_doc_filter}) "
+                "RETURN DISTINCT b AS n LIMIT $limit"
+            )
+            params = {"group_id": group_id, "relation_ids": rids, "limit": int(limit), **extra_params}
+        else:
+            cypher = (
+                "UNWIND $triples AS t "
+                f"MATCH (h:{label} {{group_id: $group_id}}) WHERE h.name = t.head OR t.head IN h.aliases "
+                f"MATCH (t2:{label} {{group_id: $group_id}}) WHERE t2.name = t.tail OR t.tail IN t2.aliases "
+                f"MATCH (h)-[r:{rel_label} {{group_id: $group_id}}]-(t2) "
+                "WHERE (t.rel_type = '' OR r.type = t.rel_type) "
+                + ("AND r.doc_id = $doc_id " if doc_id else "")
+                + "RETURN DISTINCT h AS n UNION "
+                "UNWIND $triples AS t "
+                f"MATCH (h:{label} {{group_id: $group_id}}) WHERE h.name = t.head OR t.head IN h.aliases "
+                f"MATCH (t2:{label} {{group_id: $group_id}}) WHERE t2.name = t.tail OR t.tail IN t2.aliases "
+                f"MATCH (h)-[r:{rel_label} {{group_id: $group_id}}]-(t2) "
+                "WHERE (t.rel_type = '' OR r.type = t.rel_type) "
+                + ("AND r.doc_id = $doc_id " if doc_id else "")
+                + "RETURN DISTINCT t2 AS n LIMIT $limit"
+            )
+            params = {"group_id": group_id, "triples": triples, "limit": int(limit), **extra_params}
+
+        def _run(tx):
+            return list(tx.run(cypher, **params))
+
+        if db:
+            with driver.session(database=db) as session:
+                records = session.execute_read(_run)
+        else:
+            with driver.session() as session:
+                records = session.execute_read(_run)
+        return self._records_to_nodes(records, key_name="n")
+
+    @staticmethod
+    def _paths_to_subgraph(records: Sequence[object]) -> dict:
+        nodes: dict[str, dict] = {}
+        edges: list[dict] = []
         for rec in records:
             p = rec.get("p")
             if p is None:
@@ -316,74 +445,15 @@ class Neo4jGraphRepository:
                         "confidence": r.get("confidence"),
                         "group_id": r.get("group_id"),
                         "doc_id": r.get("doc_id"),
+                        "relation_id": r.get("relation_id") or r.get("global_relation_id"),
                         "head_name": start.get("name") if start is not None else None,
                         "tail_name": end.get("name") if end is not None else None,
                     }
                 )
-
         return {"nodes": list(nodes.values()), "edges": edges}
 
-
-    def search_relations_by_entities(
-        self,
-        *,
-        group_id: str,
-        entity_names: Sequence[str],
-        limit: int = 200,
-        doc_id: Optional[str] = None,
-    ) -> list[dict]:
-        """输入实体列表，返回与这些实体相连的关系（多实体检索）。
-
-        说明：
-        - 当前实现为 1-hop 关系（e)-[r:REL]-(x)。
-        - entity_names 会同时匹配实体的 name 与 aliases。
-        - 返回为 edges list[dict]，字段尽量与 search_entity_subgraph 的 edge 结构一致。
-        """
-        if not str(group_id).strip():
-            raise ValueError("group_id is required")
-
-        names = [str(x or "").strip() for x in (entity_names or [])]
-        names = [n for n in names if n]
-        if not names:
-            return []
-
-        driver = self._client.get_driver()
-        db = self._get_database()
-
-        lim = int(limit)
-
-        where_doc = ""
-        if doc_id:
-            where_doc = "AND e.doc_id = $doc_id"
-
-        cypher = (
-            "UNWIND $names AS name "
-            "MATCH (e:Entity {group_id: $group_id}) "
-            "WHERE (e.name = name OR name IN e.aliases) "
-            + where_doc
-            + " WITH DISTINCT e "
-            "MATCH (e)-[r:REL]-(x) "
-            "RETURN DISTINCT r LIMIT $limit"
-        )
-
-        def _run(tx):
-            return list(
-                tx.run(
-                    cypher,
-                    group_id=group_id,
-                    names=names,
-                    doc_id=doc_id,
-                    limit=lim,
-                )
-            )
-
-        if db:
-            with driver.session(database=db) as session:
-                records = session.execute_read(_run)
-        else:
-            with driver.session() as session:
-                records = session.execute_read(_run)
-
+    @staticmethod
+    def _records_to_edges(records: Sequence[object]) -> list[dict]:
         edges: list[dict] = []
         for rec in records:
             r = rec.get("r")
@@ -398,232 +468,34 @@ class Neo4jGraphRepository:
                     "confidence": r.get("confidence"),
                     "group_id": r.get("group_id"),
                     "doc_id": r.get("doc_id"),
-                    "relation_id": r.get("relation_id"),
+                    "relation_id": r.get("relation_id") or r.get("global_relation_id"),
                     "head_name": start.get("name") if start is not None else None,
                     "tail_name": end.get("name") if end is not None else None,
                 }
             )
-
         return edges
 
-
-    def search_group_graph(
-        self,
-        *,
-        group_id: str,
-        limit: int = 200,
-        doc_id: Optional[str] = None,
-    ) -> dict:
-        """按 group 读取图谱（nodes/edges），用于 API 展示。"""
-        if not str(group_id).strip():
-            raise ValueError("group_id is required")
-
-        driver = self._client.get_driver()
-        db = self._get_database()
-
-        lim = int(limit)
-
-        where_doc_e = ""
-        where_doc_r = ""
-        if doc_id:
-            where_doc_e = "AND a.doc_id = $doc_id AND b.doc_id = $doc_id"
-            where_doc_r = "AND r.doc_id = $doc_id"
-
-        cypher = (
-            "MATCH (a:Entity {group_id: $group_id})-[r:REL {group_id: $group_id}]-(b:Entity {group_id: $group_id}) "
-            + where_doc_r
-            + " WITH a, r, b LIMIT $limit "
-            "RETURN a AS a, r AS r, b AS b"
-        )
-
-        def _run(tx):
-            return list(
-                tx.run(
-                    cypher,
-                    group_id=group_id,
-                    doc_id=doc_id,
-                    limit=lim,
-                )
-            )
-
-        if db:
-            with driver.session(database=db) as session:
-                records = session.execute_read(_run)
-        else:
-            with driver.session() as session:
-                records = session.execute_read(_run)
-
+    @staticmethod
+    def _records_to_nodes(records: Sequence[object], *, key_name: str) -> list[dict]:
         nodes: dict[str, dict] = {}
-        edges: list[dict] = []
-
-        def _add_node(n):
+        for rec in records:
+            n = rec.get(key_name)
             if n is None:
-                return
+                continue
             labels = list(n.labels)
             key = f"{labels}:{n.get('group_id')}:{n.get('doc_id')}:{n.get('name', '')}"
-            if key in nodes:
-                return
-            nodes[key] = {
-                "labels": labels,
-                "group_id": n.get("group_id"),
-                "doc_id": n.get("doc_id"),
-                "name": n.get("name"),
-                "type": n.get("type"),
-                "description": n.get("description"),
-                "aliases": n.get("aliases"),
-                "doc_name": n.get("doc_name"),
-                "doc_time": n.get("doc_time"),
-            }
-
-        for rec in records:
-            a = rec.get("a")
-            b = rec.get("b")
-            r = rec.get("r")
-            _add_node(a)
-            _add_node(b)
-            if r is None:
-                continue
-            start = getattr(r, "start_node", None)
-            end = getattr(r, "end_node", None)
-            edges.append(
+            nodes.setdefault(
+                key,
                 {
-                    "type": r.get("type") or r.type,
-                    "description": r.get("description"),
-                    "confidence": r.get("confidence"),
-                    "group_id": r.get("group_id"),
-                    "doc_id": r.get("doc_id"),
-                    "relation_id": r.get("relation_id"),
-                    "head_name": start.get("name") if start is not None else None,
-                    "tail_name": end.get("name") if end is not None else None,
-                }
+                    "labels": labels,
+                    "group_id": n.get("group_id"),
+                    "doc_id": n.get("doc_id"),
+                    "name": n.get("name"),
+                    "type": n.get("type"),
+                    "description": n.get("description"),
+                    "aliases": n.get("aliases"),
+                    "doc_name": n.get("doc_name"),
+                    "doc_time": n.get("doc_time"),
+                },
             )
-
-        return {"nodes": list(nodes.values()), "edges": edges}
-
-
-    def search_entities_by_relations(
-        self,
-        *,
-        group_id: str,
-        relation_ids: Sequence[str],
-        relation_triples: Sequence[dict],
-        limit: int = 200,
-        doc_id: Optional[str] = None,
-    ) -> list[dict]:
-        """输入关系列表，返回与这些关系相连的实体（多关系检索）。
-
-        匹配策略：
-        - 优先按 relation_id 精确匹配（如果提供 relation_ids）。
-        - 若缺少 relation_id，可提供 relation_triples（dict 列表），按 head_name/tail_name/relation_type 匹配。
-        """
-        if not str(group_id).strip():
-            raise ValueError("group_id is required")
-
-        rids = [str(x or "").strip() for x in (relation_ids or [])]
-        rids = [x for x in rids if x]
-
-        triples: list[dict] = []
-        for t in relation_triples or []:
-            if not isinstance(t, dict):
-                continue
-            head = str(t.get("head_name") or "").strip()
-            tail = str(t.get("tail_name") or "").strip()
-            rel_type = str(t.get("relation_type") or t.get("type") or "").strip()
-            if not head or not tail:
-                continue
-            triples.append({"head": head, "tail": tail, "rel_type": rel_type})
-
-        if not rids and not triples:
-            return []
-
-        driver = self._client.get_driver()
-        db = self._get_database()
-
-        lim = int(limit)
-
-        where_doc = ""
-        if doc_id:
-            where_doc = "AND r.doc_id = $doc_id"
-
-        cypher_by_id = (
-            "UNWIND $relation_ids AS rid "
-            "MATCH (a:Entity {group_id: $group_id})-[r:REL {group_id: $group_id, relation_id: rid}]-(b:Entity {group_id: $group_id}) "
-            + where_doc
-            + " RETURN DISTINCT a AS n UNION "
-            "UNWIND $relation_ids AS rid "
-            "MATCH (a:Entity {group_id: $group_id})-[r:REL {group_id: $group_id, relation_id: rid}]-(b:Entity {group_id: $group_id}) "
-            + where_doc
-            + " RETURN DISTINCT b AS n LIMIT $limit"
-        )
-
-        cypher_by_triple = (
-            "UNWIND $triples AS t "
-            "MATCH (h:Entity {group_id: $group_id}) "
-            "WHERE h.name = t.head OR t.head IN h.aliases "
-            "MATCH (t2:Entity {group_id: $group_id}) "
-            "WHERE t2.name = t.tail OR t.tail IN t2.aliases "
-            "MATCH (h)-[r:REL {group_id: $group_id}]-(t2) "
-            "WHERE (t.rel_type = '' OR r.type = t.rel_type) "
-            + where_doc
-            + " RETURN DISTINCT h AS n UNION "
-            "UNWIND $triples AS t "
-            "MATCH (h:Entity {group_id: $group_id}) "
-            "WHERE h.name = t.head OR t.head IN h.aliases "
-            "MATCH (t2:Entity {group_id: $group_id}) "
-            "WHERE t2.name = t.tail OR t.tail IN t2.aliases "
-            "MATCH (h)-[r:REL {group_id: $group_id}]-(t2) "
-            "WHERE (t.rel_type = '' OR r.type = t.rel_type) "
-            + where_doc
-            + " RETURN DISTINCT t2 AS n LIMIT $limit"
-        )
-
-        def _run(tx):
-            if rids:
-                return list(
-                    tx.run(
-                        cypher_by_id,
-                        group_id=group_id,
-                        relation_ids=rids,
-                        doc_id=doc_id,
-                        limit=lim,
-                    )
-                )
-            return list(
-                tx.run(
-                    cypher_by_triple,
-                    group_id=group_id,
-                    triples=triples,
-                    doc_id=doc_id,
-                    limit=lim,
-                )
-            )
-
-        if db:
-            with driver.session(database=db) as session:
-                records = session.execute_read(_run)
-        else:
-            with driver.session() as session:
-                records = session.execute_read(_run)
-
-        nodes: dict[str, dict] = {}
-        for rec in records:
-            n = rec.get("n")
-            if n is None:
-                continue
-            labels = list(n.labels)
-            key = f"{labels}:{n.get('group_id')}:{n.get('doc_id')}:{n.get('name', '')}"
-            if key in nodes:
-                continue
-            nodes[key] = {
-                "labels": labels,
-                "group_id": n.get("group_id"),
-                "doc_id": n.get("doc_id"),
-                "name": n.get("name"),
-                "type": n.get("type"),
-                "description": n.get("description"),
-                "aliases": n.get("aliases"),
-                "doc_name": n.get("doc_name"),
-                "doc_time": n.get("doc_time"),
-            }
-
         return list(nodes.values())

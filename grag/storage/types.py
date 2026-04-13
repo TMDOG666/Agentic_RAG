@@ -20,6 +20,7 @@ class ChunkRecord:
     chunk_id: str
     index: int
     text: str
+    score: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -60,6 +61,97 @@ class GraphRelationRecord:
     relation_type: str
     description: str
     confidence: Optional[int]
+
+
+@dataclass(frozen=True)
+class GlobalEntityRecord:
+    global_entity_id: str
+    group_id: str
+    canonical_name: str
+    type: str
+    aliases: List[str]
+    description: str
+
+
+@dataclass(frozen=True)
+class EntityAlignmentRecord:
+    group_id: str
+    doc_id: str
+    local_entity_id: str
+    global_entity_id: str
+    local_canonical_name: str
+    global_canonical_name: str
+    alignment_method: str
+    alignment_score: Optional[float]
+
+
+@dataclass(frozen=True)
+class GlobalRelationRecord:
+    global_relation_id: str
+    group_id: str
+    subject_global_entity_id: str
+    subject_name: str
+    object_global_entity_id: str
+    object_name: str
+    relation_type: str
+    description: str
+    confidence: Optional[int]
+
+
+@dataclass(frozen=True)
+class RelationAlignmentRecord:
+    group_id: str
+    doc_id: str
+    local_relation_id: str
+    global_relation_id: str
+    subject_name: str
+    object_name: str
+    relation_type: str
+    alignment_method: str
+    alignment_score: Optional[float]
+
+
+@dataclass(frozen=True)
+class EntityMentionRecord:
+    mention_id: str
+    group_id: str
+    doc_id: str
+    chunk_id: str
+    entity_name: str
+    entity_type: str
+    description: str
+    evidence_text: str
+    local_entity_id: str
+    global_entity_id: str
+
+
+@dataclass(frozen=True)
+class RelationMentionRecord:
+    mention_id: str
+    group_id: str
+    doc_id: str
+    chunk_id: str
+    subject_name: str
+    object_name: str
+    relation_type: str
+    description: str
+    evidence_text: str
+    local_relation_id: str
+    global_relation_id: str
+
+
+@dataclass(frozen=True)
+class IngestTaskRecord:
+    task_id: str
+    group_id: str
+    doc_id: str
+    doc_name: str
+    doc_time: str
+    status: str
+    stage: str
+    message: str
+    created_at: str
+    updated_at: str
 
 
 @dataclass(frozen=True)

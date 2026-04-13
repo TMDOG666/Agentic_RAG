@@ -29,6 +29,7 @@ class KeywordChunkHit:
     chunk_id: str
     index: int
     text: str
+    score: float = 0.0
 
 
 class KeywordRetriever:
@@ -82,6 +83,7 @@ class KeywordRetriever:
                 chunk_id=c.chunk_id,
                 index=int(c.index),
                 text=c.text,
+                score=float(getattr(c, "score", 0.0) or 0.0),
             )
             for c in chunks
         ]

@@ -82,6 +82,9 @@ class PostgresClient:
             params["sslmode"] = getattr(config, "ssl_mode", None) or getattr(
                 config, "sslmode", "prefer"
             )
+        schema = str(getattr(config, "db_schema", "public") or "public").strip()
+        if schema:
+            params["options"] = f"-c search_path={schema}"
         return params
 
     def get_connection(self):

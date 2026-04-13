@@ -18,6 +18,7 @@ GroupsAdminService：group 管理（创建/删除）服务。
 
 from datetime import datetime, timezone
 
+from grag.config import get_config_manager
 from grag.data_client import get_data_manager
 from grag.storage.repositories.milvus_graph_index_repository import MilvusGraphIndexRepository
 from grag.storage.repositories.milvus_repository import MilvusVectorRepository
@@ -33,12 +34,13 @@ class GroupsAdminService:
     def __init__(self) -> None:
         """初始化所需仓储。"""
         dm = get_data_manager()
+        settings = get_config_manager().get_settings()
         self._pg = PostgresGraphRepository(dm.get_postgres_client())
         self._neo4j = Neo4jGraphRepository(dm.get_neo4j_client())
         self._milvus = MilvusVectorRepository(dm.get_milvus_client())
         self._graph_index = MilvusGraphIndexRepository(
             dm.get_milvus_client(),
-            collection_name=str("grag_graph_index"),
+            collection_name=settings.get_default_graph_index_collection_name(),
         )
 
     def create_group(self, payload: GroupCreateIn) -> None:
@@ -50,6 +52,16 @@ class GroupsAdminService:
             group_desc=payload.group_desc or "",
             created_at=created_at,
         )
+
+
+    def list_groups_meta(self, *, limit: int = 500) -> list[dict]:
+        """列出 group 元信息列表。"""
+        return self._pg.list_groups_meta(limit=int(limit))
+
+
+    def get_group_meta(self, *, group_id: str) -> dict | None:
+        """读取单个 group 元信息。"""
+        return self._pg.get_group_meta(group_id=group_id)
 
     def delete_group(self, *, group_id: str) -> None:
         """删除 group 及其所有文档资产（doc 级级联删除）。"""

@@ -32,3 +32,6 @@ class IngestOut(BaseModel):
     chunks: int
     entities: int
     relations: int
+    task_id: Optional[str] = None
+    task_status: Optional[str] = None
+    task_stage: Optional[str] = None

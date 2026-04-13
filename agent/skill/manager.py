@@ -18,6 +18,7 @@
  
 import os
 import re
+import shlex
 import subprocess
 from pathlib import Path
 from typing import Dict, Optional
@@ -369,7 +370,7 @@ class SkillManager:
 
             if args:
                 # args 由模型传入，约定为空格分隔；直接 split() 拼到命令行参数。
-                cmd.extend(args.split())
+                cmd.extend(shlex.split(args))
 
             # 子进程环境：强制 python IO 使用 utf-8，减少 Windows 控制台编码差异。
             env = os.environ.copy()

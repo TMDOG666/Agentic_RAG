@@ -456,8 +456,7 @@ class ConfigValidator:
 
         # 验证置信度阈值
         confidence_fields = [
-            "entity_extraction.confidence_threshold",
-            "relation_extraction.confidence_threshold"
+            "entity_relation_extraction.confidence_threshold",
         ]
 
         for field_path in confidence_fields:

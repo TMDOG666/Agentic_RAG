@@ -10,7 +10,7 @@
 | Milvus   | grag-milvus    | 19530 (gRPC), 9091 (metrics) | 向量库，依赖 etcd + minio |
 | etcd     | grag-milvus-etcd  | 2379 (内部)       | Milvus 元数据  |
 | minio    | grag-milvus-minio | 9000, 9001        | Milvus 对象存储 |
-| PostgreSQL | grag-postgres | 5432              | 关系库         |
+| PostgreSQL | grag-postgres | 5430              | 关系库         |
 
 ## 使用步骤
 
@@ -60,7 +60,7 @@
 
 - **PostgreSQL**：`relational_databases.postgres`  
   - `host: localhost`  
-  - `port: 5432`  
+  - `port: 5430`  
   - `database: grag`  
   - `user: postgres`  
   - 密码：环境变量 `POSTGRES_PASSWORD`

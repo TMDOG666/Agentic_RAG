@@ -20,6 +20,21 @@ from api.services.groups_admin_service import GroupsAdminService
 router = APIRouter()
 
 
+@router.get("")
+def list_groups_meta(limit: int = 500) -> list[dict]:
+    """列出 group 元信息列表。"""
+    svc = GroupsAdminService()
+    return svc.list_groups_meta(limit=limit)
+
+
+@router.get("/{group_id}")
+def get_group_meta(group_id: str) -> dict:
+    """读取单个 group 元信息。"""
+    svc = GroupsAdminService()
+    out = svc.get_group_meta(group_id=group_id)
+    return out or {}
+
+
 @router.post("")
 def create_group(payload: GroupCreateIn) -> dict:
     """创建（或更新）group 元信息。

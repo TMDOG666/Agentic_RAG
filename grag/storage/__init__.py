@@ -15,9 +15,16 @@ from .types import (
     DocumentRecord,
     ChunkRecord,
     ChunkEmbeddingRecord,
+    EntityMentionRecord,
+    EntityAlignmentRecord,
+    GlobalRelationRecord,
     GraphEntityRecord,
     GraphIndexRecord,
     GraphRelationRecord,
+    GlobalEntityRecord,
+    IngestTaskRecord,
+    RelationMentionRecord,
+    RelationAlignmentRecord,
 )
 from .protocol import GraphStorage
 from .storage_impl import DataClientGraphStorage
@@ -26,9 +33,16 @@ __all__ = [
     "DocumentRecord",
     "ChunkRecord",
     "ChunkEmbeddingRecord",
+    "EntityMentionRecord",
+    "EntityAlignmentRecord",
+    "GlobalRelationRecord",
     "GraphEntityRecord",
     "GraphIndexRecord",
     "GraphRelationRecord",
+    "GlobalEntityRecord",
+    "IngestTaskRecord",
+    "RelationMentionRecord",
+    "RelationAlignmentRecord",
     "GraphStorage",
     "DataClientGraphStorage",
 ]

@@ -15,7 +15,7 @@
 """
 
 from typing import Any, Dict, Optional, Union, List
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from enum import Enum
 import os
 
@@ -79,6 +79,7 @@ class VectorDatabaseConfig(BaseModel):
     api_key_env: Optional[str] = Field(None, description="API密钥环境变量")
     db_name: Optional[str] = Field(None, description="数据库名")
     collection_name: str = Field(..., description="集合/索引名称")
+    graph_index_collection_name: Optional[str] = Field(None, description="graph_index 集合名称")
     connection_timeout: int = Field(30, gt=0, description="连接超时时间(秒)")
 
     # Milvus特有
@@ -131,7 +132,8 @@ class RelationalDatabaseConfig(BaseModel):
     user: Optional[str] = Field(None, description="用户名")
     password: Optional[str] = Field(None, description="密码")
     password_env: Optional[str] = Field(None, description="密码环境变量")
-    db_schema: str = Field("public", description="数据库模式名")
+    model_config = ConfigDict(populate_by_name=True)
+    db_schema: str = Field("public", alias="schema", description="数据库模式名")
     charset: str = Field("utf8mb4", description="字符集")
     connection_timeout: int = Field(30, gt=0, description="连接超时时间(秒)")
     max_connections: int = Field(20, gt=0, description="最大连接数")
@@ -403,6 +405,11 @@ class GraphRAGSettings(BaseModel):
             return self.relational_databases[provider_name]
         else:
             raise ValueError(f"不支持的提供商类型: {provider_type}")
+
+    def get_default_graph_index_collection_name(self, provider_name: Optional[str] = None) -> str:
+        config = self.get_provider_config(ProviderType.VECTOR_DB, provider_name)
+        value = str(getattr(config, "graph_index_collection_name", "") or "").strip()
+        return value or "grag_graph_index"
 
     def get_env_var(self, env_var_name: str, default: Optional[str] = None) -> Optional[str]:
         """获取环境变量值

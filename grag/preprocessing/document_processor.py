@@ -18,6 +18,7 @@ import os
 from pathlib import Path
 from typing import Optional, Union, List, Dict, Any
 import logging
+import re
 
 # 文档处理库
 try:
@@ -78,6 +79,10 @@ class DocumentProcessor:
         # 文本清洗 / 标准化由 TextCleaner 负责
         self._text_cleaner: Optional[TextCleaner] = None
         self._settings = get_config_manager().get_settings()
+        self._doc_processing_cfg = dict(getattr(self._settings.preprocessing, 'document_processing', {}) or {})
+        self._supported_formats = self._resolve_supported_formats()
+        self._max_file_size_bytes = self._parse_size_to_bytes(self._doc_processing_cfg.get('max_file_size'))
+        self._preferred_encoding = str(self._doc_processing_cfg.get('encoding', 'utf-8') or 'utf-8').strip() or 'utf-8'
         
     def _get_vision_client(self):
         """获取视觉模型客户端（懒加载）"""
@@ -117,8 +122,13 @@ class DocumentProcessor:
         
         if not file_path.exists():
             raise FileNotFoundError(f"文件不存在: {file_path}")
-        
+
+        if self._max_file_size_bytes is not None and file_path.stat().st_size > self._max_file_size_bytes:
+            raise ValueError(f"文件超过大小限制: {file_path}")
+
         suffix = file_path.suffix.lower()
+        if suffix not in self._supported_formats:
+            raise ValueError(f"文件格式未在配置允许列表中: {suffix}")
         
         # 根据文件类型选择处理方法
         if suffix in self.SUPPORTED_TEXT_FORMATS:
@@ -143,11 +153,11 @@ class DocumentProcessor:
     def _process_text_file(self, file_path: Path) -> str:
         """处理文本文件"""
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with open(file_path, 'r', encoding=self._preferred_encoding) as f:
                 return f.read()
         except UnicodeDecodeError:
             # 尝试其他编码
-            for encoding in ['gbk', 'gb2312', 'latin-1']:
+            for encoding in [self._preferred_encoding, 'utf-8', 'gbk', 'gb2312', 'latin-1']:
                 try:
                     with open(file_path, 'r', encoding=encoding) as f:
                         return f.read()
@@ -297,13 +307,7 @@ class DocumentProcessor:
         }
         
         # 获取所有支持的文件
-        all_formats = (
-            self.SUPPORTED_TEXT_FORMATS |
-            self.SUPPORTED_DOC_FORMATS |
-            self.SUPPORTED_PDF_FORMATS |
-            self.SUPPORTED_TABLE_FORMATS |
-            self.SUPPORTED_IMAGE_FORMATS
-        )
+        all_formats = self._supported_formats
         
         pattern = '**/*' if recursive else '*'
         files = []
@@ -340,14 +344,48 @@ class DocumentProcessor:
     
     def get_supported_formats(self) -> List[str]:
         """获取支持的文件格式列表"""
-        all_formats = (
-            self.SUPPORTED_TEXT_FORMATS |
-            self.SUPPORTED_DOC_FORMATS |
-            self.SUPPORTED_PDF_FORMATS |
-            self.SUPPORTED_TABLE_FORMATS |
-            self.SUPPORTED_IMAGE_FORMATS
+        return sorted(list(self._supported_formats))
+
+    @classmethod
+    def _implemented_formats(cls) -> set[str]:
+        return (
+            cls.SUPPORTED_TEXT_FORMATS |
+            cls.SUPPORTED_DOC_FORMATS |
+            cls.SUPPORTED_PDF_FORMATS |
+            cls.SUPPORTED_TABLE_FORMATS |
+            cls.SUPPORTED_IMAGE_FORMATS
         )
-        return sorted(list(all_formats))
+
+    def _resolve_supported_formats(self) -> set[str]:
+        configured = self._doc_processing_cfg.get('supported_formats')
+        implemented = self._implemented_formats()
+        if not isinstance(configured, list) or not configured:
+            return implemented
+        normalized = set()
+        for item in configured:
+            value = str(item or '').strip().lower()
+            if not value:
+                continue
+            if not value.startswith('.'):
+                value = f'.{value}'
+            normalized.add(value)
+        matched = normalized & implemented
+        return matched or implemented
+
+    @staticmethod
+    def _parse_size_to_bytes(raw: Any) -> Optional[int]:
+        if raw is None:
+            return None
+        value = str(raw).strip()
+        if not value:
+            return None
+        m = re.match(r'^(\d+(?:\.\d+)?)(B|KB|MB|GB)$', value.upper())
+        if not m:
+            return None
+        amount = float(m.group(1))
+        unit = m.group(2)
+        factors = {'B': 1, 'KB': 1024, 'MB': 1024 * 1024, 'GB': 1024 * 1024 * 1024}
+        return int(amount * factors[unit])
 
 
 # 全局单例

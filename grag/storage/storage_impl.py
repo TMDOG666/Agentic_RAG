@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Optional, Sequence
 
+from grag.config import get_config_manager
 from grag.data_client import DataManager, get_data_manager
 
 from .protocol import GraphStorage
@@ -15,39 +16,20 @@ from .types import (
     ChunkEmbeddingRecord,
     ChunkRecord,
     DocumentRecord,
+    EntityMentionRecord,
+    EntityAlignmentRecord,
+    GlobalRelationRecord,
     GraphEntityRecord,
     GraphIndexRecord,
     GraphRelationRecord,
+    GlobalEntityRecord,
+    IngestTaskRecord,
+    RelationMentionRecord,
+    RelationAlignmentRecord,
 )
 
 
-"""grag.storage.storage_impl
-
-Storage 层的具体实现（Implementation）。
-
-本模块提供 `DataClientGraphStorage`：
-- 通过 `grag.data_client.DataManager` 获取三类数据库 client
-- 组合三个 repository：
-  - PostgresGraphRepository：文档/Chunk 文本/实体元信息
-  - MilvusVectorRepository：Chunk embedding
-  - Neo4jGraphRepository：图结构（实体节点 + 关系边）
-
-这样上层（GraphBuilder）只依赖 `GraphStorage` 接口，不直接依赖任何数据库 client。
-"""
-
-
 class DataClientGraphStorage(GraphStorage):
-    """基于 DataManager 的 GraphStorage 实现。
-
-    单一职责：
-    - 将 GraphBuilder 传入的 records 分发给三个 repository 完成落库。
-
-    失败语义：
-    - 当前实现为“尽快失败”（fail-fast）：任何一个 repository 抛异常将向上抛出。
-    - 注意：这里没有跨库分布式事务；因此出现部分库写入成功、部分失败的情况是可能的。
-      如果需要强一致性，应在上层引入幂等重试/补偿机制，或将写入收敛到同一事务系统。
-    """
-
     def __init__(
         self,
         *,
@@ -57,22 +39,72 @@ class DataClientGraphStorage(GraphStorage):
         milvus_upsert_strategy: str = "insert_only",
     ) -> None:
         self._data_manager = data_manager or get_data_manager()
+        settings = get_config_manager().get_settings()
         self._pg_repo = PostgresGraphRepository(self._data_manager.get_postgres_client())
         self._milvus_repo = MilvusVectorRepository(
             self._data_manager.get_milvus_client(),
             collection_name=milvus_collection_name,
             upsert_strategy=milvus_upsert_strategy,
         )
-
-        # graph_index collection（独立于 chunk embeddings）：
-        # - 默认名给一个稳定值，避免用户忘记配置导致无法落库。
-        # - 如果你希望更强的隔离（如按 group 创建不同 graph_index collection），可以在上层传入 override。
         self._graph_index_repo = MilvusGraphIndexRepository(
             self._data_manager.get_milvus_client(),
-            collection_name=str(milvus_graph_index_collection_name or "grag_graph_index"),
+            collection_name=str(
+                milvus_graph_index_collection_name
+                or settings.get_default_graph_index_collection_name()
+            ),
             upsert_strategy=milvus_upsert_strategy,
         )
         self._neo4j_repo = Neo4jGraphRepository(self._data_manager.get_neo4j_client())
+
+    def save_base_document(
+        self,
+        *,
+        document: DocumentRecord,
+        chunks: Sequence[ChunkRecord],
+        embeddings: Sequence[ChunkEmbeddingRecord],
+    ) -> None:
+        self._pg_repo.upsert_document_and_chunks(
+            document=document,
+            chunks=chunks,
+            entities=[],
+            relations=[],
+        )
+        self._milvus_repo.upsert_chunk_embeddings(document=document, embeddings=embeddings)
+
+    def save_graph_assets(
+        self,
+        *,
+        document: DocumentRecord,
+        entities: Sequence[GraphEntityRecord],
+        relations: Sequence[GraphRelationRecord],
+        entity_mentions: Sequence[EntityMentionRecord],
+        relation_mentions: Sequence[RelationMentionRecord],
+        global_entities: Sequence[GlobalEntityRecord],
+        entity_alignments: Sequence[EntityAlignmentRecord],
+        global_relations: Sequence[GlobalRelationRecord],
+        relation_alignments: Sequence[RelationAlignmentRecord],
+        graph_index_records: Sequence[GraphIndexRecord],
+    ) -> None:
+        self._pg_repo.upsert_document_and_chunks(
+            document=document,
+            chunks=[],
+            entities=entities,
+            relations=relations,
+        )
+        self._pg_repo.upsert_entity_mentions(mentions=entity_mentions)
+        self._pg_repo.upsert_relation_mentions(mentions=relation_mentions)
+        self._pg_repo.upsert_global_entities(entities=global_entities)
+        self._pg_repo.upsert_entity_alignments(alignments=entity_alignments)
+        self._pg_repo.upsert_global_relations(relations=global_relations)
+        self._pg_repo.upsert_relation_alignments(alignments=relation_alignments)
+        self._graph_index_repo.upsert_records(records=graph_index_records)
+        self._neo4j_repo.upsert_graph(
+            document=document,
+            entities=entities,
+            relations=relations,
+            global_entities=global_entities,
+            global_relations=global_relations,
+        )
 
     def save_document(
         self,
@@ -82,44 +114,36 @@ class DataClientGraphStorage(GraphStorage):
         embeddings: Sequence[ChunkEmbeddingRecord],
         entities: Sequence[GraphEntityRecord],
         relations: Sequence[GraphRelationRecord],
+        entity_mentions: Sequence[EntityMentionRecord],
+        relation_mentions: Sequence[RelationMentionRecord],
+        global_entities: Sequence[GlobalEntityRecord],
+        entity_alignments: Sequence[EntityAlignmentRecord],
+        global_relations: Sequence[GlobalRelationRecord],
+        relation_alignments: Sequence[RelationAlignmentRecord],
         graph_index_records: Sequence[GraphIndexRecord],
     ) -> None:
-        """落库单篇文档对应的全部资产。
-
-        输入来自 GraphBuilder（已经完成：chunk_id 对齐、entity/relation canonical 化、embedding 计算）。
-
-        写入顺序（最小可用）：
-        1) Postgres：document / chunks / entities
-        2) Milvus：chunk embeddings
-        3) Neo4j：document / entities / relations
-
-        说明：
-        - Postgres 与 Neo4j 都会写 Document/Entity，但目的不同：
-          - Postgres：便于检索/回溯/审计（结构化元信息）
-          - Neo4j：便于图查询与图推理
-        """
-        self._pg_repo.upsert_document_and_chunks(
-            document=document,
-            chunks=chunks,
-            entities=entities,
-            relations=relations,
-        )
-        self._milvus_repo.upsert_chunk_embeddings(
-            document=document,
-            embeddings=embeddings,
-        )
-
-        # graph_index：实体/关系向量写入
-        self._graph_index_repo.upsert_records(records=graph_index_records)
-
-        self._neo4j_repo.upsert_graph(
+        self.save_base_document(document=document, chunks=chunks, embeddings=embeddings)
+        self.save_graph_assets(
             document=document,
             entities=entities,
             relations=relations,
+            entity_mentions=entity_mentions,
+            relation_mentions=relation_mentions,
+            global_entities=global_entities,
+            entity_alignments=entity_alignments,
+            global_relations=global_relations,
+            relation_alignments=relation_alignments,
+            graph_index_records=graph_index_records,
         )
 
     def list_group_entities(self, *, group_id: str, limit: int = 500) -> Sequence[GraphEntityRecord]:
-        # 说明：跨文档融合所需的“历史实体候选”目前以 Postgres 为权威来源。
-        # - Postgres 存的是结构化实体元信息（canonical/type/aliases/description），读取成本低。
-        # - Neo4j 也有实体节点，但当前 key 含 doc_id，且查询/排序策略更复杂；因此此处先走 Postgres。
         return self._pg_repo.list_group_entities(group_id=group_id, limit=limit)
+
+    def list_group_global_entities(self, *, group_id: str, limit: int = 500) -> Sequence[GlobalEntityRecord]:
+        return self._pg_repo.list_group_global_entities(group_id=group_id, limit=limit)
+
+    def list_group_global_relations(self, *, group_id: str, limit: int = 500) -> Sequence[GlobalRelationRecord]:
+        return self._pg_repo.list_group_global_relations(group_id=group_id, limit=limit)
+
+    def upsert_ingest_task(self, *, task: IngestTaskRecord) -> None:
+        self._pg_repo.upsert_ingest_task(task=task)

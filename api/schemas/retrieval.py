@@ -22,6 +22,7 @@ RetrievalMode = Literal[
     "chunks_keyword",
     "entities",
     "relations",
+    "graph_search",
     "relations_by_entities",
     "entities_by_relations",
 ]
@@ -46,6 +47,7 @@ class RetrievalRequest(BaseModel):
     rerank_provider: Optional[str] = None
 
     output_fields: Optional[list[str]] = None
+    include_evidence: Optional[bool] = None
 
     # graph primitives
     # relations_by_entities：需要 entity_names

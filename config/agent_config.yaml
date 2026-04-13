@@ -13,7 +13,7 @@
 # ============================================================================
 
 # 默认 provider 名称：必须与 `providers` 下的一级 key 对应。
-provider: vllm
+provider: siliconflow
 
 # 所有可用 provider 的配置表。
 providers:
@@ -23,7 +23,7 @@ providers:
   # - api_key_env 指向你本机/CI 环境变量中的 key
   # --------------------------------------------------------------------------
   siliconflow:
-    model: Qwen/Qwen3.5-35B-A3B
+    model: Qwen/Qwen3.5-27B
     base_url: https://api.siliconflow.cn/v1
     api_key_env: SILICONFLOW_API_KEY
     temperature: 0

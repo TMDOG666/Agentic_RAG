@@ -45,7 +45,7 @@ from grag.storage.storage_impl import DataClientGraphStorage
 
 storage = DataClientGraphStorage(
     milvus_collection_name="my_collection",
-    milvus_graph_index_collection_name="grag_graph_index",
+    milvus_graph_index_collection_name="my_graph_index_collection",
     milvus_upsert_strategy="delete_then_insert",
 )
 

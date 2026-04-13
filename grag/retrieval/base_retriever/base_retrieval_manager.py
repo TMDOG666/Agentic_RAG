@@ -27,6 +27,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable, Optional, Sequence
 
+from grag.config import get_config_manager
 from grag.data_client import get_data_manager
 from grag.model.embedding_client import EmbeddingClient
 from grag.storage.repositories.milvus_graph_index_repository import MilvusGraphIndexRepository
@@ -35,6 +36,7 @@ from .keyword_retriever import KeywordRetriever, KeywordChunkHit
 from .semantic_retriever import SemanticRetriever, SemanticChunkHit
 from .graph_retriever import GraphRetriever, GraphSubgraphResult
 
+GLOBAL_GRAPH_DOC_ID = "__global__"
 
 
 @dataclass(frozen=True)
@@ -73,9 +75,13 @@ class BaseRetrievalManager:
         #   2) 在 graph_index 中做 ANN 召回（kind=entity / kind=relation）
         #   3) 将召回结果（实体名、关系端点）作为 Neo4j 扩图起点（由上层策略决定如何用）
         dm = get_data_manager()
+        settings = get_config_manager().get_settings()
         self._graph_index_repo = MilvusGraphIndexRepository(
             dm.get_milvus_client(),
-            collection_name=str(milvus_graph_index_collection_name or "grag_graph_index"),
+            collection_name=str(
+                milvus_graph_index_collection_name
+                or settings.get_default_graph_index_collection_name()
+            ),
         )
 
         # EmbeddingClient：用于将查询文本编码为向量。
@@ -196,12 +202,13 @@ class BaseRetrievalManager:
         if not str(query or "").strip():
             return []
         qv = self._embedding_client.embed_query(str(query))
+        effective_doc_id = doc_id if doc_id is not None else GLOBAL_GRAPH_DOC_ID
         return self._graph_index_repo.search(
             group_id=group_id,
             kind="entity",
             query_vector=qv,
             top_k=int(top_k),
-            doc_id=doc_id,
+            doc_id=effective_doc_id,
             output_fields=output_fields,
         )
 
@@ -226,12 +233,13 @@ class BaseRetrievalManager:
         if not str(query or "").strip():
             return []
         qv = self._embedding_client.embed_query(str(query))
+        effective_doc_id = doc_id if doc_id is not None else GLOBAL_GRAPH_DOC_ID
         return self._graph_index_repo.search(
             group_id=group_id,
             kind="relation",
             query_vector=qv,
             top_k=int(top_k),
-            doc_id=doc_id,
+            doc_id=effective_doc_id,
             output_fields=output_fields,
         )
 

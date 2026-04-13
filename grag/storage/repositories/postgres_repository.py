@@ -1,10 +1,23 @@
 from __future__ import annotations
 
+import re
 from typing import Optional, Sequence
 
 from grag.data_client.postgres_client import PostgresClient
 
-from ..types import ChunkRecord, DocumentRecord, GraphEntityRecord, GraphRelationRecord
+from ..types import (
+    ChunkRecord,
+    DocumentRecord,
+    EntityMentionRecord,
+    EntityAlignmentRecord,
+    GlobalEntityRecord,
+    GlobalRelationRecord,
+    GraphEntityRecord,
+    GraphRelationRecord,
+    IngestTaskRecord,
+    RelationMentionRecord,
+    RelationAlignmentRecord,
+)
 
 
 """grag.storage.repositories.postgres_repository
@@ -110,6 +123,112 @@ class PostgresGraphRepository:
                 PRIMARY KEY (group_id, relation_id)
             );
             """,
+            """
+            CREATE TABLE IF NOT EXISTS grag_global_entities (
+                group_id TEXT NOT NULL,
+                global_entity_id TEXT NOT NULL,
+                canonical_name TEXT NOT NULL,
+                type TEXT NOT NULL,
+                aliases_json TEXT NOT NULL,
+                description TEXT NOT NULL,
+                PRIMARY KEY (group_id, global_entity_id)
+            );
+            """,
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS grag_global_entities_name_uq
+            ON grag_global_entities (group_id, canonical_name);
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS grag_entity_alignment (
+                group_id TEXT NOT NULL,
+                doc_id TEXT NOT NULL,
+                local_entity_id TEXT NOT NULL,
+                global_entity_id TEXT NOT NULL,
+                local_canonical_name TEXT NOT NULL,
+                global_canonical_name TEXT NOT NULL,
+                alignment_method TEXT NOT NULL,
+                alignment_score DOUBLE PRECISION,
+                PRIMARY KEY (group_id, doc_id, local_entity_id)
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS grag_global_relations (
+                group_id TEXT NOT NULL,
+                global_relation_id TEXT NOT NULL,
+                subject_global_entity_id TEXT NOT NULL,
+                subject_name TEXT NOT NULL,
+                object_global_entity_id TEXT NOT NULL,
+                object_name TEXT NOT NULL,
+                relation_type TEXT NOT NULL,
+                description TEXT NOT NULL,
+                confidence INTEGER,
+                PRIMARY KEY (group_id, global_relation_id)
+            );
+            """,
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS grag_global_relations_tuple_uq
+            ON grag_global_relations (group_id, subject_global_entity_id, relation_type, object_global_entity_id);
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS grag_relation_alignment (
+                group_id TEXT NOT NULL,
+                doc_id TEXT NOT NULL,
+                local_relation_id TEXT NOT NULL,
+                global_relation_id TEXT NOT NULL,
+                subject_name TEXT NOT NULL,
+                object_name TEXT NOT NULL,
+                relation_type TEXT NOT NULL,
+                alignment_method TEXT NOT NULL,
+                alignment_score DOUBLE PRECISION,
+                PRIMARY KEY (group_id, doc_id, local_relation_id)
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS grag_entity_mentions (
+                mention_id TEXT NOT NULL,
+                group_id TEXT NOT NULL,
+                doc_id TEXT NOT NULL,
+                chunk_id TEXT NOT NULL,
+                entity_name TEXT NOT NULL,
+                entity_type TEXT NOT NULL,
+                description TEXT NOT NULL,
+                evidence_text TEXT NOT NULL,
+                local_entity_id TEXT NOT NULL,
+                global_entity_id TEXT NOT NULL,
+                PRIMARY KEY (mention_id)
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS grag_relation_mentions (
+                mention_id TEXT NOT NULL,
+                group_id TEXT NOT NULL,
+                doc_id TEXT NOT NULL,
+                chunk_id TEXT NOT NULL,
+                subject_name TEXT NOT NULL,
+                object_name TEXT NOT NULL,
+                relation_type TEXT NOT NULL,
+                description TEXT NOT NULL,
+                evidence_text TEXT NOT NULL,
+                local_relation_id TEXT NOT NULL,
+                global_relation_id TEXT NOT NULL,
+                PRIMARY KEY (mention_id)
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS grag_ingest_tasks (
+                task_id TEXT NOT NULL,
+                group_id TEXT NOT NULL,
+                doc_id TEXT NOT NULL,
+                doc_name TEXT NOT NULL,
+                doc_time TEXT NOT NULL,
+                status TEXT NOT NULL,
+                stage TEXT NOT NULL,
+                message TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (task_id)
+            );
+            """,
         ]
 
         conn = self._client.get_connection()
@@ -149,6 +268,17 @@ class PostgresGraphRepository:
                     try:
                         cur.execute(
                             "CREATE UNIQUE INDEX IF NOT EXISTS grag_entities_entity_id_uq ON grag_entities (group_id, entity_id)"
+                        )
+                    except Exception:
+                        pass
+                    try:
+                        cur.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+                    except Exception:
+                        pass
+                    try:
+                        cur.execute(
+                            "CREATE INDEX IF NOT EXISTS grag_chunks_text_trgm_idx "
+                            "ON grag_chunks USING GIN (text gin_trgm_ops)"
                         )
                     except Exception:
                         pass
@@ -204,6 +334,71 @@ class PostgresGraphRepository:
                         """,
                         (group_id, str(group_name or ""), str(group_desc or ""), str(created_at)),
                     )
+        finally:
+            conn.close()
+
+
+    def get_group_meta(self, *, group_id: str) -> dict | None:
+        """读取 group 元信息（来自 grag_groups）。"""
+        if not str(group_id).strip():
+            raise ValueError("group_id is required")
+        self.ensure_schema()
+
+        conn = self._client.get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT group_id, group_name, group_desc, created_at
+                        FROM grag_groups
+                        WHERE group_id = %s
+                        LIMIT 1;
+                        """,
+                        (str(group_id),),
+                    )
+                    row = cur.fetchone()
+                    if not row:
+                        return None
+                    return {
+                        "group_id": str(row[0] or ""),
+                        "group_name": str(row[1] or ""),
+                        "group_desc": str(row[2] or ""),
+                        "created_at": str(row[3] or ""),
+                    }
+        finally:
+            conn.close()
+
+
+    def list_groups_meta(self, *, limit: int = 500) -> list[dict]:
+        """列出 group 元信息列表（来自 grag_groups）。"""
+        self.ensure_schema()
+
+        conn = self._client.get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT group_id, group_name, group_desc, created_at
+                        FROM grag_groups
+                        ORDER BY group_id ASC
+                        LIMIT %s;
+                        """,
+                        (int(limit),),
+                    )
+                    rows = cur.fetchall() or []
+                    out: list[dict] = []
+                    for row in rows:
+                        out.append(
+                            {
+                                "group_id": str(row[0] or ""),
+                                "group_name": str(row[1] or ""),
+                                "group_desc": str(row[2] or ""),
+                                "created_at": str(row[3] or ""),
+                            }
+                        )
+                    return out
         finally:
             conn.close()
 
@@ -318,6 +513,48 @@ class PostgresGraphRepository:
         try:
             with conn:
                 with conn.cursor() as cur:
+                    cur.execute(
+                        "DELETE FROM grag_entity_alignment WHERE group_id=%s AND doc_id=%s",
+                        (group_id, doc_id),
+                    )
+                    cur.execute(
+                        "DELETE FROM grag_entity_mentions WHERE group_id=%s AND doc_id=%s",
+                        (group_id, doc_id),
+                    )
+                    cur.execute(
+                        "DELETE FROM grag_relation_alignment WHERE group_id=%s AND doc_id=%s",
+                        (group_id, doc_id),
+                    )
+                    cur.execute(
+                        "DELETE FROM grag_relation_mentions WHERE group_id=%s AND doc_id=%s",
+                        (group_id, doc_id),
+                    )
+                    cur.execute(
+                        """
+                        DELETE FROM grag_global_entities ge
+                        WHERE ge.group_id = %s
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM grag_entity_alignment ea
+                              WHERE ea.group_id = ge.group_id
+                                AND ea.global_entity_id = ge.global_entity_id
+                          )
+                        """,
+                        (group_id,),
+                    )
+                    cur.execute(
+                        """
+                        DELETE FROM grag_global_relations gr
+                        WHERE gr.group_id = %s
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM grag_relation_alignment ra
+                              WHERE ra.group_id = gr.group_id
+                                AND ra.global_relation_id = gr.global_relation_id
+                          )
+                        """,
+                        (group_id,),
+                    )
                     cur.execute(
                         "DELETE FROM grag_relations WHERE group_id=%s AND doc_id=%s",
                         (group_id, doc_id),
@@ -547,28 +784,66 @@ class PostgresGraphRepository:
 
         self.ensure_schema()
 
-        q = f"%{query}%"
-        where = ["c.group_id = %s", "c.text ILIKE %s"]
-        params: list[object] = [group_id, q]
+        q = str(query or "").strip()
+        tokens = [tok.strip() for tok in re.split(r"[\s,，。；;、|/]+", q) if tok.strip()]
+        tokens = tokens[:8]
+        compact_q = re.sub(r"\s+", "", q)
+
+        where = ["c.group_id = %s"]
+        where_params: list[object] = [group_id]
 
         if doc_id:
             where.append("c.doc_id = %s")
-            params.append(doc_id)
+            where_params.append(doc_id)
         if doc_time_start:
             where.append("d.doc_time >= %s")
-            params.append(doc_time_start)
+            where_params.append(doc_time_start)
         if doc_time_end:
             where.append("d.doc_time <= %s")
-            params.append(doc_time_end)
+            where_params.append(doc_time_end)
 
+        score_parts = [
+            "CASE WHEN c.text ILIKE %s THEN 5.0 ELSE 0.0 END",
+            "similarity(c.text, %s) * 2.5",
+            "word_similarity(%s, c.text) * 2.0",
+        ]
+        score_params: list[object] = [f"%{q}%", q, q]
+
+        match_parts = [
+            "c.text ILIKE %s",
+            "similarity(c.text, %s) >= 0.08",
+            "word_similarity(%s, c.text) >= 0.12",
+        ]
+        match_params: list[object] = [f"%{q}%", q, q]
+
+        if compact_q and compact_q != q:
+            score_parts.append("CASE WHEN c.text ILIKE %s THEN 2.5 ELSE 0.0 END")
+            match_parts.append("c.text ILIKE %s")
+            compact_like = f"%{compact_q}%"
+            score_params.append(compact_like)
+            match_params.append(compact_like)
+
+        for tok in tokens:
+            like = f"%{tok}%"
+            score_parts.append("CASE WHEN c.text ILIKE %s THEN 0.75 ELSE 0.0 END")
+            match_parts.append("c.text ILIKE %s")
+            score_params.append(like)
+            match_params.append(like)
+
+        score_expr = " + ".join(score_parts)
         sql = (
-            "SELECT c.doc_id, c.chunk_id, c.chunk_index, c.text, d.doc_time "
+            "SELECT c.doc_id, c.chunk_id, c.chunk_index, c.text, d.doc_time, "
+            f"({score_expr}) AS keyword_score "
             "FROM grag_chunks c "
             "JOIN grag_documents d ON d.group_id = c.group_id AND d.doc_id = c.doc_id "
-            f"WHERE {' AND '.join(where)} "
-            "ORDER BY c.doc_id DESC, c.chunk_index ASC "
+            f"WHERE {' AND '.join(where)} AND ({' OR '.join(match_parts)}) "
+            "ORDER BY keyword_score DESC, d.doc_time DESC, c.chunk_index ASC "
             "LIMIT %s;"
         )
+        params: list[object] = []
+        params.extend(score_params)
+        params.extend(where_params)
+        params.extend(match_params)
         params.append(int(limit))
 
         conn = self._client.get_connection()
@@ -579,7 +854,7 @@ class PostgresGraphRepository:
                     rows = cur.fetchall()
 
             out: list[ChunkRecord] = []
-            for doc_id_v, chunk_id, idx, text, _doc_time in rows:
+            for doc_id_v, chunk_id, idx, text, _doc_time, keyword_score in rows:
                 out.append(
                     ChunkRecord(
                         group_id=str(group_id),
@@ -587,6 +862,7 @@ class PostgresGraphRepository:
                         chunk_id=str(chunk_id),
                         index=int(idx),
                         text=str(text),
+                        score=float(keyword_score or 0.0),
                     )
                 )
             return out
@@ -701,6 +977,583 @@ class PostgresGraphRepository:
                     )
                 )
             return out
+        finally:
+            conn.close()
+
+    def list_group_global_entities(self, *, group_id: str, limit: int = 500) -> Sequence[GlobalEntityRecord]:
+        import json
+
+        self.ensure_schema()
+
+        conn = self._client.get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT global_entity_id, canonical_name, type, aliases_json, description
+                        FROM grag_global_entities
+                        WHERE group_id = %s
+                        ORDER BY canonical_name ASC
+                        LIMIT %s;
+                        """,
+                        (group_id, int(limit)),
+                    )
+                    rows = cur.fetchall()
+
+            out: list[GlobalEntityRecord] = []
+            for global_entity_id, canonical_name, etype, aliases_json, description in rows:
+                aliases: list[str] = []
+                try:
+                    raw = json.loads(aliases_json or "[]")
+                    if isinstance(raw, list):
+                        aliases = [str(x) for x in raw if str(x).strip()]
+                except Exception:
+                    aliases = []
+                out.append(
+                    GlobalEntityRecord(
+                        global_entity_id=str(global_entity_id),
+                        group_id=str(group_id),
+                        canonical_name=str(canonical_name),
+                        type=str(etype),
+                        aliases=aliases,
+                        description=str(description),
+                    )
+                )
+            return out
+        finally:
+            conn.close()
+
+    def upsert_global_entities(self, *, entities: Sequence[GlobalEntityRecord]) -> None:
+        import json
+
+        if not entities:
+            return
+        self.ensure_schema()
+
+        conn = self._client.get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    for e in entities:
+                        cur.execute(
+                            """
+                            INSERT INTO grag_global_entities (
+                                group_id, global_entity_id, canonical_name, type, aliases_json, description
+                            )
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (group_id, global_entity_id)
+                            DO UPDATE SET
+                                canonical_name = EXCLUDED.canonical_name,
+                                type = EXCLUDED.type,
+                                aliases_json = EXCLUDED.aliases_json,
+                                description = EXCLUDED.description;
+                            """,
+                            (
+                                e.group_id,
+                                e.global_entity_id,
+                                e.canonical_name,
+                                e.type,
+                                json.dumps(list(e.aliases), ensure_ascii=False),
+                                e.description,
+                            ),
+                        )
+        finally:
+            conn.close()
+
+    def upsert_entity_alignments(self, *, alignments: Sequence[EntityAlignmentRecord]) -> None:
+        if not alignments:
+            return
+        self.ensure_schema()
+
+        conn = self._client.get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    for a in alignments:
+                        cur.execute(
+                            """
+                            INSERT INTO grag_entity_alignment (
+                                group_id, doc_id, local_entity_id, global_entity_id,
+                                local_canonical_name, global_canonical_name,
+                                alignment_method, alignment_score
+                            )
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (group_id, doc_id, local_entity_id)
+                            DO UPDATE SET
+                                global_entity_id = EXCLUDED.global_entity_id,
+                                local_canonical_name = EXCLUDED.local_canonical_name,
+                                global_canonical_name = EXCLUDED.global_canonical_name,
+                                alignment_method = EXCLUDED.alignment_method,
+                                alignment_score = EXCLUDED.alignment_score;
+                            """,
+                            (
+                                a.group_id,
+                                a.doc_id,
+                                a.local_entity_id,
+                                a.global_entity_id,
+                                a.local_canonical_name,
+                                a.global_canonical_name,
+                                a.alignment_method,
+                                a.alignment_score,
+                            ),
+                        )
+        finally:
+            conn.close()
+
+    def list_group_global_relations(self, *, group_id: str, limit: int = 500) -> Sequence[GlobalRelationRecord]:
+        self.ensure_schema()
+        conn = self._client.get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT global_relation_id, subject_global_entity_id, subject_name,
+                               object_global_entity_id, object_name, relation_type,
+                               description, confidence
+                        FROM grag_global_relations
+                        WHERE group_id = %s
+                        ORDER BY relation_type ASC, subject_name ASC, object_name ASC
+                        LIMIT %s;
+                        """,
+                        (group_id, int(limit)),
+                    )
+                    rows = cur.fetchall()
+            return [
+                GlobalRelationRecord(
+                    global_relation_id=str(global_relation_id),
+                    group_id=str(group_id),
+                    subject_global_entity_id=str(subject_global_entity_id),
+                    subject_name=str(subject_name),
+                    object_global_entity_id=str(object_global_entity_id),
+                    object_name=str(object_name),
+                    relation_type=str(relation_type),
+                    description=str(description),
+                    confidence=confidence if confidence is None else int(confidence),
+                )
+                for (
+                    global_relation_id,
+                    subject_global_entity_id,
+                    subject_name,
+                    object_global_entity_id,
+                    object_name,
+                    relation_type,
+                    description,
+                    confidence,
+                ) in rows
+            ]
+        finally:
+            conn.close()
+
+    def upsert_global_relations(self, *, relations: Sequence[GlobalRelationRecord]) -> None:
+        if not relations:
+            return
+        self.ensure_schema()
+        conn = self._client.get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    for r in relations:
+                        cur.execute(
+                            """
+                            INSERT INTO grag_global_relations (
+                                group_id, global_relation_id, subject_global_entity_id, subject_name,
+                                object_global_entity_id, object_name, relation_type, description, confidence
+                            )
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (group_id, global_relation_id)
+                            DO UPDATE SET
+                                subject_global_entity_id = EXCLUDED.subject_global_entity_id,
+                                subject_name = EXCLUDED.subject_name,
+                                object_global_entity_id = EXCLUDED.object_global_entity_id,
+                                object_name = EXCLUDED.object_name,
+                                relation_type = EXCLUDED.relation_type,
+                                description = EXCLUDED.description,
+                                confidence = EXCLUDED.confidence;
+                            """,
+                            (
+                                r.group_id,
+                                r.global_relation_id,
+                                r.subject_global_entity_id,
+                                r.subject_name,
+                                r.object_global_entity_id,
+                                r.object_name,
+                                r.relation_type,
+                                r.description,
+                                r.confidence,
+                            ),
+                        )
+        finally:
+            conn.close()
+
+    def upsert_relation_alignments(self, *, alignments: Sequence[RelationAlignmentRecord]) -> None:
+        if not alignments:
+            return
+        self.ensure_schema()
+        conn = self._client.get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    for a in alignments:
+                        cur.execute(
+                            """
+                            INSERT INTO grag_relation_alignment (
+                                group_id, doc_id, local_relation_id, global_relation_id,
+                                subject_name, object_name, relation_type, alignment_method, alignment_score
+                            )
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (group_id, doc_id, local_relation_id)
+                            DO UPDATE SET
+                                global_relation_id = EXCLUDED.global_relation_id,
+                                subject_name = EXCLUDED.subject_name,
+                                object_name = EXCLUDED.object_name,
+                                relation_type = EXCLUDED.relation_type,
+                                alignment_method = EXCLUDED.alignment_method,
+                                alignment_score = EXCLUDED.alignment_score;
+                            """,
+                            (
+                                a.group_id,
+                                a.doc_id,
+                                a.local_relation_id,
+                                a.global_relation_id,
+                                a.subject_name,
+                                a.object_name,
+                                a.relation_type,
+                                a.alignment_method,
+                                a.alignment_score,
+                            ),
+                        )
+        finally:
+            conn.close()
+
+    def upsert_entity_mentions(self, *, mentions: Sequence[EntityMentionRecord]) -> None:
+        if not mentions:
+            return
+        self.ensure_schema()
+        conn = self._client.get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    for m in mentions:
+                        cur.execute(
+                            """
+                            INSERT INTO grag_entity_mentions (
+                                mention_id, group_id, doc_id, chunk_id, entity_name, entity_type,
+                                description, evidence_text, local_entity_id, global_entity_id
+                            )
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (mention_id)
+                            DO UPDATE SET
+                                entity_name = EXCLUDED.entity_name,
+                                entity_type = EXCLUDED.entity_type,
+                                description = EXCLUDED.description,
+                                evidence_text = EXCLUDED.evidence_text,
+                                local_entity_id = EXCLUDED.local_entity_id,
+                                global_entity_id = EXCLUDED.global_entity_id;
+                            """,
+                            (
+                                m.mention_id,
+                                m.group_id,
+                                m.doc_id,
+                                m.chunk_id,
+                                m.entity_name,
+                                m.entity_type,
+                                m.description,
+                                m.evidence_text,
+                                m.local_entity_id,
+                                m.global_entity_id,
+                            ),
+                        )
+        finally:
+            conn.close()
+
+    def upsert_relation_mentions(self, *, mentions: Sequence[RelationMentionRecord]) -> None:
+        if not mentions:
+            return
+        self.ensure_schema()
+        conn = self._client.get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    for m in mentions:
+                        cur.execute(
+                            """
+                            INSERT INTO grag_relation_mentions (
+                                mention_id, group_id, doc_id, chunk_id, subject_name, object_name,
+                                relation_type, description, evidence_text, local_relation_id, global_relation_id
+                            )
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (mention_id)
+                            DO UPDATE SET
+                                subject_name = EXCLUDED.subject_name,
+                                object_name = EXCLUDED.object_name,
+                                relation_type = EXCLUDED.relation_type,
+                                description = EXCLUDED.description,
+                                evidence_text = EXCLUDED.evidence_text,
+                                local_relation_id = EXCLUDED.local_relation_id,
+                                global_relation_id = EXCLUDED.global_relation_id;
+                            """,
+                            (
+                                m.mention_id,
+                                m.group_id,
+                                m.doc_id,
+                                m.chunk_id,
+                                m.subject_name,
+                                m.object_name,
+                                m.relation_type,
+                                m.description,
+                                m.evidence_text,
+                                m.local_relation_id,
+                                m.global_relation_id,
+                            ),
+                        )
+        finally:
+            conn.close()
+
+    def list_entity_mentions(
+        self,
+        *,
+        group_id: str,
+        global_entity_ids: Sequence[str] | None = None,
+        local_entity_ids: Sequence[str] | None = None,
+        doc_id: str | None = None,
+        limit: int = 200,
+    ) -> list[EntityMentionRecord]:
+        if not str(group_id).strip():
+            raise ValueError("group_id is required")
+        gids = [str(x or "").strip() for x in (global_entity_ids or []) if str(x or "").strip()]
+        lids = [str(x or "").strip() for x in (local_entity_ids or []) if str(x or "").strip()]
+        if not gids and not lids:
+            return []
+        where = ["group_id = %s"]
+        params: list[object] = [group_id]
+        if doc_id:
+            where.append("doc_id = %s")
+            params.append(doc_id)
+        if gids and lids:
+            where.append("(global_entity_id = ANY(%s) OR local_entity_id = ANY(%s))")
+            params.extend([gids, lids])
+        elif gids:
+            where.append("global_entity_id = ANY(%s)")
+            params.append(gids)
+        else:
+            where.append("local_entity_id = ANY(%s)")
+            params.append(lids)
+        sql = (
+            "SELECT mention_id, group_id, doc_id, chunk_id, entity_name, entity_type, "
+            "description, evidence_text, local_entity_id, global_entity_id "
+            "FROM grag_entity_mentions "
+            f"WHERE {' AND '.join(where)} "
+            "ORDER BY doc_id DESC, chunk_id ASC "
+            "LIMIT %s;"
+        )
+        params.append(int(limit))
+        conn = self._client.get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(sql, tuple(params))
+                    rows = cur.fetchall() or []
+            return [
+                EntityMentionRecord(
+                    mention_id=str(row[0]),
+                    group_id=str(row[1]),
+                    doc_id=str(row[2]),
+                    chunk_id=str(row[3]),
+                    entity_name=str(row[4]),
+                    entity_type=str(row[5]),
+                    description=str(row[6]),
+                    evidence_text=str(row[7]),
+                    local_entity_id=str(row[8]),
+                    global_entity_id=str(row[9]),
+                )
+                for row in rows
+            ]
+        finally:
+            conn.close()
+
+    def list_relation_mentions(
+        self,
+        *,
+        group_id: str,
+        global_relation_ids: Sequence[str] | None = None,
+        local_relation_ids: Sequence[str] | None = None,
+        doc_id: str | None = None,
+        limit: int = 200,
+    ) -> list[RelationMentionRecord]:
+        if not str(group_id).strip():
+            raise ValueError("group_id is required")
+        gids = [str(x or "").strip() for x in (global_relation_ids or []) if str(x or "").strip()]
+        lids = [str(x or "").strip() for x in (local_relation_ids or []) if str(x or "").strip()]
+        if not gids and not lids:
+            return []
+        where = ["group_id = %s"]
+        params: list[object] = [group_id]
+        if doc_id:
+            where.append("doc_id = %s")
+            params.append(doc_id)
+        if gids and lids:
+            where.append("(global_relation_id = ANY(%s) OR local_relation_id = ANY(%s))")
+            params.extend([gids, lids])
+        elif gids:
+            where.append("global_relation_id = ANY(%s)")
+            params.append(gids)
+        else:
+            where.append("local_relation_id = ANY(%s)")
+            params.append(lids)
+        sql = (
+            "SELECT mention_id, group_id, doc_id, chunk_id, subject_name, object_name, relation_type, "
+            "description, evidence_text, local_relation_id, global_relation_id "
+            "FROM grag_relation_mentions "
+            f"WHERE {' AND '.join(where)} "
+            "ORDER BY doc_id DESC, chunk_id ASC "
+            "LIMIT %s;"
+        )
+        params.append(int(limit))
+        conn = self._client.get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(sql, tuple(params))
+                    rows = cur.fetchall() or []
+            return [
+                RelationMentionRecord(
+                    mention_id=str(row[0]),
+                    group_id=str(row[1]),
+                    doc_id=str(row[2]),
+                    chunk_id=str(row[3]),
+                    subject_name=str(row[4]),
+                    object_name=str(row[5]),
+                    relation_type=str(row[6]),
+                    description=str(row[7]),
+                    evidence_text=str(row[8]),
+                    local_relation_id=str(row[9]),
+                    global_relation_id=str(row[10]),
+                )
+                for row in rows
+            ]
+        finally:
+            conn.close()
+
+    def upsert_ingest_task(self, *, task: IngestTaskRecord) -> None:
+        self.ensure_schema()
+        conn = self._client.get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO grag_ingest_tasks (
+                            task_id, group_id, doc_id, doc_name, doc_time,
+                            status, stage, message, created_at, updated_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (task_id)
+                        DO UPDATE SET
+                            status = EXCLUDED.status,
+                            stage = EXCLUDED.stage,
+                            message = EXCLUDED.message,
+                            updated_at = EXCLUDED.updated_at;
+                        """,
+                        (
+                            task.task_id,
+                            task.group_id,
+                            task.doc_id,
+                            task.doc_name,
+                            task.doc_time,
+                            task.status,
+                            task.stage,
+                            task.message,
+                            task.created_at,
+                            task.updated_at,
+                        ),
+                    )
+        finally:
+            conn.close()
+
+    def get_ingest_task(self, *, task_id: str) -> IngestTaskRecord | None:
+        if not str(task_id or "").strip():
+            return None
+        self.ensure_schema()
+        conn = self._client.get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT task_id, group_id, doc_id, doc_name, doc_time,
+                               status, stage, message, created_at, updated_at
+                        FROM grag_ingest_tasks
+                        WHERE task_id = %s
+                        LIMIT 1;
+                        """,
+                        (str(task_id),),
+                    )
+                    row = cur.fetchone()
+            if not row:
+                return None
+            return IngestTaskRecord(
+                task_id=str(row[0]),
+                group_id=str(row[1]),
+                doc_id=str(row[2]),
+                doc_name=str(row[3]),
+                doc_time=str(row[4]),
+                status=str(row[5]),
+                stage=str(row[6]),
+                message=str(row[7]),
+                created_at=str(row[8]),
+                updated_at=str(row[9]),
+            )
+        finally:
+            conn.close()
+
+    def list_ingest_tasks(
+        self,
+        *,
+        group_id: str | None = None,
+        doc_id: str | None = None,
+        limit: int = 100,
+    ) -> list[IngestTaskRecord]:
+        self.ensure_schema()
+        where: list[str] = []
+        params: list[object] = []
+        if str(group_id or "").strip():
+            where.append("group_id = %s")
+            params.append(str(group_id))
+        if str(doc_id or "").strip():
+            where.append("doc_id = %s")
+            params.append(str(doc_id))
+        sql = (
+            "SELECT task_id, group_id, doc_id, doc_name, doc_time, "
+            "status, stage, message, created_at, updated_at "
+            "FROM grag_ingest_tasks "
+            + (f"WHERE {' AND '.join(where)} " if where else "")
+            + "ORDER BY updated_at DESC, created_at DESC "
+            + "LIMIT %s;"
+        )
+        params.append(int(limit))
+        conn = self._client.get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(sql, tuple(params))
+                    rows = cur.fetchall() or []
+            return [
+                IngestTaskRecord(
+                    task_id=str(row[0]),
+                    group_id=str(row[1]),
+                    doc_id=str(row[2]),
+                    doc_name=str(row[3]),
+                    doc_time=str(row[4]),
+                    status=str(row[5]),
+                    stage=str(row[6]),
+                    message=str(row[7]),
+                    created_at=str(row[8]),
+                    updated_at=str(row[9]),
+                )
+                for row in rows
+            ]
         finally:
             conn.close()
 

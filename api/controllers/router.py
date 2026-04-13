@@ -22,6 +22,8 @@ from api.controllers.groups_controller import router as groups_router
 from api.controllers.groups_admin_controller import router as groups_admin_router
 from api.controllers.health_controller import router as health_router
 from api.controllers.ingest_controller import router as ingest_router
+from api.controllers.ingest_tasks_controller import router as ingest_tasks_router
+from api.controllers.logs_controller import router as logs_router
 from api.controllers.retrieval_controller import router as retrieval_router
 from api.controllers.skills_controller import router as skills_router
 
@@ -44,6 +46,8 @@ api_router.include_router(groups_admin_router, prefix="/groups-admin", tags=["gr
 api_router.include_router(entities_router, prefix="/entities", tags=["entities"])
 api_router.include_router(documents_router, prefix="/documents", tags=["documents"])
 api_router.include_router(ingest_router, prefix="/ingest", tags=["ingest"])
+api_router.include_router(ingest_tasks_router, prefix="/ingest-tasks", tags=["ingest"])
+api_router.include_router(logs_router, prefix="/logs", tags=["system"])
 
 # retrieval: 对 GRAG 检索能力的统一封装入口
 api_router.include_router(retrieval_router, prefix="/retrieval", tags=["retrieval"])
