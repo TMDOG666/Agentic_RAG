@@ -1,0 +1,44 @@
+manifest_version: "1.0"
+name: "time-now"
+version: "0.1.0"
+display_name: "Time Now"
+description: "获取当前时间，默认输出 UTC ISO8601，可用于生成 doc_time、日志时间戳或时间过滤参数。"
+type: "script-skill"
+tags:
+  - utility
+  - time
+entrypoints:
+  prompt:
+    path: "SKILL.md"
+    format: "markdown"
+  scripts:
+    - name: "now"
+      path: "scripts/now.py"
+      runtime: "python"
+      description: "输出当前时间"
+capabilities:
+  - "prompt-guidance"
+  - "script-execution"
+  - "time"
+permissions:
+  filesystem:
+    read:
+      - "SKILL.md"
+      - "references/**"
+      - "assets/**"
+    write: []
+    execute:
+      - "scripts/*.py"
+  network: false
+  subprocess: true
+runtime:
+  python: ">=3.10"
+  shell: false
+  dependencies: []
+compatibility:
+  agent_frameworks:
+    - "custom-agent"
+    - "langgraph"
+  os:
+    - "windows"
+    - "linux"

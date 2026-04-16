@@ -1,0 +1,40 @@
+manifest_version: "1.0"
+name: "rag-answering"
+version: "0.1.0"
+display_name: "RAG Answering"
+description: "让 Agent 先判断检索结构，再通过工具层检索计划模块执行多步检索、验证证据并生成带引用的最终回答。"
+type: "prompt-skill"
+tags:
+  - rag
+  - answering
+  - evidence
+entrypoints:
+  prompt:
+    path: "SKILL.md"
+    format: "markdown"
+  scripts: []
+capabilities:
+  - "prompt-guidance"
+  - "reasoning"
+  - "evidence-grounding"
+permissions:
+  filesystem:
+    read:
+      - "SKILL.md"
+      - "references/**"
+      - "assets/**"
+    write: []
+    execute: []
+  network: false
+  subprocess: false
+runtime:
+  python: ">=3.10"
+  shell: false
+  dependencies: []
+compatibility:
+  agent_frameworks:
+    - "custom-agent"
+    - "langgraph"
+  os:
+    - "windows"
+    - "linux"

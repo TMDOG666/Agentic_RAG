@@ -1,0 +1,68 @@
+manifest_version: "1.0"
+name: "rag-retrieval"
+version: "0.1.0"
+display_name: "RAG Retrieval"
+description: "为 Agent 提供多模式 RAG 检索能力，由 Agent 自主判断检索模式、组合方式与验证步骤，再调用工具层检索计划模块执行。"
+type: "hybrid-skill"
+tags:
+  - rag
+  - retrieval
+  - graph
+  - evidence
+entrypoints:
+  prompt:
+    path: "SKILL.md"
+    format: "markdown"
+  scripts:
+    - name: "chunks_vector"
+      path: "scripts/chunks_vector.py"
+      runtime: "python"
+      description: "向量召回文档 chunks"
+    - name: "chunks_keyword"
+      path: "scripts/chunks_keyword.py"
+      runtime: "python"
+      description: "关键词召回文档 chunks"
+    - name: "entities"
+      path: "scripts/entities.py"
+      runtime: "python"
+      description: "检索实体结果"
+    - name: "relations"
+      path: "scripts/relations.py"
+      runtime: "python"
+      description: "检索关系结果"
+    - name: "relations_by_entities"
+      path: "scripts/relations_by_entities.py"
+      runtime: "python"
+      description: "按实体扩展关系"
+    - name: "entities_by_relations"
+      path: "scripts/entities_by_relations.py"
+      runtime: "python"
+      description: "按关系扩展实体"
+capabilities:
+  - "prompt-guidance"
+  - "script-execution"
+  - "retrieval"
+  - "graph-query"
+permissions:
+  filesystem:
+    read:
+      - "SKILL.md"
+      - "references/**"
+      - "assets/**"
+    write: []
+    execute:
+      - "scripts/*.py"
+  network: false
+  subprocess: true
+runtime:
+  python: ">=3.10"
+  shell: false
+  dependencies:
+    - "requests"
+compatibility:
+  agent_frameworks:
+    - "custom-agent"
+    - "langgraph"
+  os:
+    - "windows"
+    - "linux"
