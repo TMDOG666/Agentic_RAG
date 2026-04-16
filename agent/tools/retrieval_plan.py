@@ -1,7 +1,6 @@
 """检索计划模块。
 
-该模块负责：
-
+负责：
 - 解析对话中的 RAG 上下文
 - 定义检索计划 schema
 - 校验 plan_json
@@ -16,14 +15,14 @@ import json
 import re
 from typing import Any
 
+from agent.telemetry import emit_event
 
-# 从注入到用户问题中的上下文行提取 group_id / doc_id。
+
 RAG_CONTEXT_RE = re.compile(
     r"^\[RAG_CONTEXT\]\s*(group_id|doc_id)\s*=\s*(.+?)\s*$",
     re.IGNORECASE,
 )
 
-# 当前允许 Agent 在计划中使用的检索模式。
 ALLOWED_MODES = {
     "chunks_vector",
     "chunks_keyword",
@@ -35,7 +34,6 @@ ALLOWED_MODES = {
 
 
 def extract_rag_context(text: str) -> tuple[str, str, str]:
-    """从原始问题文本中提取 RAG 上下文，并返回净化后的 query。"""
     group_id = ""
     doc_id = ""
     kept_lines: list[str] = []
@@ -57,7 +55,6 @@ def extract_rag_context(text: str) -> tuple[str, str, str]:
 
 
 def parse_plan(plan_json: str) -> dict[str, Any]:
-    """把字符串形式的检索计划解析为字典，并做最基础的结构校验。"""
     payload = json.loads((plan_json or "").strip())
     if not isinstance(payload, dict):
         raise ValueError("plan_json 必须是 JSON 对象")
@@ -69,7 +66,6 @@ def parse_plan(plan_json: str) -> dict[str, Any]:
 
 
 def get_plan_schema() -> dict[str, Any]:
-    """返回检索计划模块的 JSON schema，供 Agent 组织 plan_json 时参考。"""
     return {
         "type": "object",
         "required": ["steps"],
@@ -115,7 +111,6 @@ def get_plan_schema() -> dict[str, Any]:
 
 
 def _first_non_empty(item: dict[str, Any], *keys: str) -> Any:
-    """按顺序读取候选字段，返回第一个非空值。"""
     for key in keys:
         value = item.get(key)
         if value not in (None, "", [], {}):
@@ -124,7 +119,6 @@ def _first_non_empty(item: dict[str, Any], *keys: str) -> Any:
 
 
 def _find_candidate_lists(payload: Any) -> list[list[dict[str, Any]]]:
-    """在返回 JSON 中递归搜索最像结果列表的候选列表。"""
     found: list[list[dict[str, Any]]] = []
 
     def walk(node: Any) -> None:
@@ -144,12 +138,10 @@ def _find_candidate_lists(payload: Any) -> list[list[dict[str, Any]]]:
 
 
 def normalize_items(payload: Any, *, mode: str, label: str) -> list[dict[str, Any]]:
-    """把不同检索模式的原始 JSON 归一化成统一证据结构。"""
     candidate_lists = _find_candidate_lists(payload)
     if not candidate_lists:
         return []
 
-    # 通常最长的 dict 列表最接近实际召回结果。
     source = max(candidate_lists, key=len)
     items: list[dict[str, Any]] = []
     for item in source:
@@ -157,13 +149,7 @@ def normalize_items(payload: Any, *, mode: str, label: str) -> list[dict[str, An
         document_name = _first_non_empty(item, "document_name", "doc_name", "doc_title", "doc_id")
         chunk_id = _first_non_empty(item, "chunk_id", "id")
         entity_name = _first_non_empty(item, "canonical_name", "name", "entity_name")
-        relation_value = _first_non_empty(
-            item,
-            "triple",
-            "relation",
-            "predicate",
-            "relation_triple",
-        )
+        relation_value = _first_non_empty(item, "triple", "relation", "predicate", "relation_triple")
         score = _first_non_empty(item, "score", "distance", "similarity")
         items.append(
             {
@@ -184,7 +170,6 @@ def normalize_items(payload: Any, *, mode: str, label: str) -> list[dict[str, An
 
 
 def dedupe_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """基于核心证据字段做去重，避免多步检索返回重复结果。"""
     seen: set[str] = set()
     deduped: list[dict[str, Any]] = []
 
@@ -210,7 +195,6 @@ def dedupe_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _to_csv(values: Any) -> str:
-    """把字符串或字符串列表统一转成逗号分隔形式。"""
     if isinstance(values, list):
         return ",".join(str(v).strip() for v in values if str(v).strip())
     return str(values or "").strip()
@@ -223,7 +207,6 @@ def _build_script_args(
     default_query: str,
     step: dict[str, Any],
 ) -> str:
-    """根据计划 step 构造对应检索脚本的命令行参数。"""
     mode = str(step.get("mode", "")).strip()
     if mode not in ALLOWED_MODES:
         raise ValueError(f"不支持的检索模式: {mode}")
@@ -265,7 +248,6 @@ def _build_script_args(
 
 
 def _script_name_for_mode(mode: str) -> str:
-    """按约定把检索模式映射为脚本路径。"""
     return f"scripts/{mode}.py"
 
 
@@ -277,7 +259,6 @@ def execute_retrieval_plan(
     group_id: str = "",
     doc_id: str = "",
 ) -> dict[str, Any]:
-    """执行 Agent 制定的多步检索计划，并返回统一证据结果。"""
     inferred_group_id, inferred_doc_id, clean_query = extract_rag_context(query)
     effective_group_id = (group_id or inferred_group_id).strip()
     effective_doc_id = (doc_id or inferred_doc_id).strip()
@@ -287,6 +268,16 @@ def execute_retrieval_plan(
         raise ValueError("缺少 group_id")
 
     plan = parse_plan(plan_json)
+    emit_event(
+        "retrieval.plan.start",
+        {
+            "query": effective_query,
+            "group_id": effective_group_id,
+            "doc_id": effective_doc_id or None,
+            "step_count": len(plan["steps"]),
+        },
+    )
+
     step_outputs: list[dict[str, Any]] = []
     merged_items: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
@@ -294,11 +285,23 @@ def execute_retrieval_plan(
     for index, step in enumerate(plan["steps"], start=1):
         if not isinstance(step, dict):
             errors.append({"step": index, "error": "step 必须是对象"})
+            emit_event("retrieval.step.error", {"step": index, "error": "step 必须是对象"})
             continue
 
+        mode = str(step.get("mode", "")).strip()
+        label = str(step.get("label") or f"step_{index}").strip()
+        step_query = step.get("query") or effective_query
+        emit_event(
+            "retrieval.step.start",
+            {
+                "step": index,
+                "mode": mode,
+                "label": label,
+                "query": step_query,
+            },
+        )
+
         try:
-            mode = str(step.get("mode", "")).strip()
-            label = str(step.get("label") or f"step_{index}").strip()
             script_name = _script_name_for_mode(mode)
             script_args = _build_script_args(
                 group_id=effective_group_id,
@@ -307,11 +310,13 @@ def execute_retrieval_plan(
                 step=step,
             )
             raw = skill_manager.execute_skill_script("rag-retrieval", script_name, script_args)
-
-            # 底层脚本执行失败时，保留错误并继续执行后续 step。
             raw_text = str(raw).lstrip()
-            if raw_text.startswith("❌") or raw_text.startswith("鉂"):
+            if raw_text.startswith("❌") or raw_text.startswith("错误"):
                 errors.append({"step": index, "mode": mode, "error": str(raw)})
+                emit_event(
+                    "retrieval.step.error",
+                    {"step": index, "mode": mode, "label": label, "error": str(raw)},
+                )
                 continue
 
             payload = json.loads((raw or "").strip())
@@ -322,17 +327,31 @@ def execute_retrieval_plan(
                     "step": index,
                     "label": label,
                     "mode": mode,
-                    "query": step.get("query") or effective_query,
+                    "query": step_query,
                     "items": items,
                     "raw_count": len(items),
                 }
             )
+            emit_event(
+                "retrieval.step.end",
+                {
+                    "step": index,
+                    "mode": mode,
+                    "label": label,
+                    "query": step_query,
+                    "raw_count": len(items),
+                },
+            )
         except Exception as exc:
-            errors.append({"step": index, "mode": step.get("mode"), "error": str(exc)})
+            errors.append({"step": index, "mode": mode, "error": str(exc)})
+            emit_event(
+                "retrieval.step.error",
+                {"step": index, "mode": mode, "label": label, "error": str(exc)},
+            )
 
     deduped_items = dedupe_items(merged_items)
     return_limit = int(plan.get("return_limit", 12))
-    return {
+    result = {
         "query": effective_query,
         "group_id": effective_group_id,
         "doc_id": effective_doc_id or None,
@@ -341,3 +360,12 @@ def execute_retrieval_plan(
         "items": deduped_items[: max(1, return_limit)],
         "errors": errors,
     }
+    emit_event(
+        "retrieval.plan.end",
+        {
+            "step_count": len(step_outputs),
+            "item_count": len(result["items"]),
+            "error_count": len(errors),
+        },
+    )
+    return result

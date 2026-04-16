@@ -1,35 +1,17 @@
 from __future__ import annotations
 
-"""api.services.agent_service
+import json
+import queue
+import threading
+from collections.abc import Iterator
 
-AgentService：对项目内 Agent 能力的 API 侧封装。
-
-定位：
-- controller 层只负责参数接收与返回模型。
-- service 层负责调用底层 `agent` 包（例如带 skills 的 agent）并将结果转为 API schema。
-
-注意：
-- 当前实现为“同步一次性调用”（run_once）。
-- 如果后续要支持流式输出/多轮会话，需要在这里扩展为 session-aware 的接口。
-"""
-
-from agent.agent.agent_with_skills import run_once
+from agent.agent.agent_with_skills import run_once, stream_once
 
 from api.schemas.agent import AgentRunIn, AgentRunOut
 
 
 class AgentService:
-    def run(self, payload: AgentRunIn) -> AgentRunOut:
-        """运行一次 agent。
-
-        Args:
-            payload: API 入参（user_text + 可选 prefix）。
-
-        Returns:
-            AgentRunOut: agent 的输出文本。
-        """
-        # user_text 是用户输入；prefix 可用于在 API 层注入额外上下文（例如 system 指令/业务约束）。
-        # group_id/doc_id 也在这里注入，以避免用户在自然语言里重复。
+    def _build_prompt(self, payload: AgentRunIn) -> str:
         injected_lines: list[str] = []
         if payload.group_id:
             injected_lines.append(f"[RAG_CONTEXT] group_id={payload.group_id}")
@@ -37,13 +19,47 @@ class AgentService:
             injected_lines.append(f"[RAG_CONTEXT] doc_id={payload.doc_id}")
 
         injected_prefix = "\n".join(injected_lines).strip()
-
         text = payload.user_text
         if payload.prefix:
             text = f"{payload.prefix}\n{text}"
         if injected_prefix:
             text = f"{injected_prefix}\n{text}"
+        return text
 
-        # run_once 会返回 agent 的最终答复；此处强转为 str，保证 schema 稳定。
-        reply = run_once(text)
+    def run(self, payload: AgentRunIn) -> AgentRunOut:
+        reply = run_once(self._build_prompt(payload))
         return AgentRunOut(reply=str(reply))
+
+    def stream(self, payload: AgentRunIn) -> Iterator[str]:
+        def send(event: str, data: dict) -> str:
+            return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+        yield send(
+            "meta",
+            {
+                "group_id": payload.group_id,
+                "doc_id": payload.doc_id,
+                "user_text": payload.user_text,
+            },
+        )
+
+        event_queue: queue.Queue[str | None] = queue.Queue()
+
+        def on_event(event: dict) -> None:
+            event_type = str(event.get("type") or "message")
+            event_queue.put(send(event_type, event))
+
+        def worker() -> None:
+            try:
+                final_reply = stream_once(self._build_prompt(payload), on_event)
+                event_queue.put(send("done", {"reply": final_reply}))
+            finally:
+                event_queue.put(None)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+        while True:
+            item = event_queue.get()
+            if item is None:
+                break
+            yield item

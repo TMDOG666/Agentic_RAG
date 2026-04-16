@@ -9,6 +9,7 @@ import json
 
 from langchain_core.tools import tool
 
+from agent.telemetry import emit_event
 from agent.tools.retrieval_plan import execute_retrieval_plan, get_plan_schema
 
 
@@ -19,13 +20,29 @@ def create_tools(skill_manager):
     def load_skill(skill_name: str) -> str:
         """加载某个 skill 的正文说明。"""
         print(f"[tool] load_skill: {skill_name}")
-        return skill_manager.load_skill(skill_name)
+        emit_event("skill.load.start", {"skill_name": skill_name})
+        content = skill_manager.load_skill(skill_name)
+        emit_event(
+            "skill.load.end",
+            {"skill_name": skill_name, "content_preview": str(content or "")[:240]},
+        )
+        return content
 
     @tool
     def read_skill_file(skill_name: str, filename: str) -> str:
         """读取某个 skill 目录下的引用文件。"""
         print(f"[tool] read_skill_file: {skill_name}/{filename}")
-        return skill_manager.read_skill_file(skill_name, filename)
+        emit_event("skill.file.start", {"skill_name": skill_name, "filename": filename})
+        content = skill_manager.read_skill_file(skill_name, filename)
+        emit_event(
+            "skill.file.end",
+            {
+                "skill_name": skill_name,
+                "filename": filename,
+                "content_preview": str(content or "")[:240],
+            },
+        )
+        return content
 
     @tool
     def execute_skill_script(
@@ -36,16 +53,42 @@ def create_tools(skill_manager):
         **kwargs,
     ) -> str:
         """执行某个 skill 下的脚本。"""
-        # 兼容历史参数名，避免不同提示词版本传参不一致。
         v_args = kwargs.get("v__args", "")
         effective_args = args or script_args or v_args
         print(f"[tool] execute_skill_script: {skill_name}/{script_name} {effective_args}")
-        return skill_manager.execute_skill_script(skill_name, script_name, effective_args)
+        emit_event(
+            "skill.script.start",
+            {
+                "skill_name": skill_name,
+                "script_name": script_name,
+                "script_args": effective_args,
+            },
+        )
+        content = skill_manager.execute_skill_script(skill_name, script_name, effective_args)
+        emit_event(
+            "skill.script.end",
+            {
+                "skill_name": skill_name,
+                "script_name": script_name,
+                "script_args": effective_args,
+                "content_preview": str(content or "")[:240],
+            },
+        )
+        return content
 
     @tool
     def get_retrieval_plan_schema() -> str:
         """返回检索计划模块的 JSON schema。"""
-        return json.dumps(get_plan_schema(), ensure_ascii=False)
+        emit_event("tool.start", {"tool_name": "get_retrieval_plan_schema"})
+        content = json.dumps(get_plan_schema(), ensure_ascii=False)
+        emit_event(
+            "tool.end",
+            {
+                "tool_name": "get_retrieval_plan_schema",
+                "content_preview": content[:240],
+            },
+        )
+        return content
 
     @tool
     def run_retrieval_plan(
@@ -56,6 +99,15 @@ def create_tools(skill_manager):
     ) -> str:
         """执行检索计划，并返回统一的证据结果。"""
         try:
+            emit_event(
+                "tool.start",
+                {
+                    "tool_name": "run_retrieval_plan",
+                    "query": query,
+                    "group_id": group_id,
+                    "doc_id": doc_id,
+                },
+            )
             result = execute_retrieval_plan(
                 skill_manager=skill_manager,
                 query=query,
@@ -63,8 +115,26 @@ def create_tools(skill_manager):
                 group_id=group_id,
                 doc_id=doc_id,
             )
-            return json.dumps(result, ensure_ascii=False)
+            content = json.dumps(result, ensure_ascii=False)
+            emit_event(
+                "tool.end",
+                {
+                    "tool_name": "run_retrieval_plan",
+                    "steps": len(result.get("steps") or []),
+                    "items": len(result.get("items") or []),
+                    "errors": len(result.get("errors") or []),
+                    "items_preview": (result.get("items") or [])[:8],
+                },
+            )
+            return content
         except Exception as exc:
+            emit_event(
+                "tool.error",
+                {
+                    "tool_name": "run_retrieval_plan",
+                    "error": str(exc),
+                },
+            )
             return f"检索计划执行失败: {exc}"
 
     return [

@@ -1,6 +1,7 @@
 const STORAGE_KEY = 'agentic-rag:agent-chat-history:v1'
 const MAX_SESSIONS_PER_SCOPE = 20
 const MAX_MESSAGES_PER_SESSION = 100
+const MAX_RUNS_PER_SESSION = 12
 
 function safeParse(raw, fallback) {
   try {
@@ -44,11 +45,13 @@ function makeSession({ groupId, docId, firstUserMessage = '' }) {
     createdAt: now,
     updatedAt: now,
     messages: createDefaultMessages(),
+    runs: [],
   }
 }
 
 function normalizeSession(session) {
   const messages = Array.isArray(session?.messages) ? session.messages : createDefaultMessages()
+  const runs = Array.isArray(session?.runs) ? session.runs : []
   return {
     id: String(session?.id || ''),
     title: String(session?.title || '新会话'),
@@ -59,6 +62,7 @@ function normalizeSession(session) {
     messages: messages
       .filter((item) => item && typeof item.content === 'string' && typeof item.role === 'string')
       .slice(-MAX_MESSAGES_PER_SESSION),
+    runs: runs.slice(-MAX_RUNS_PER_SESSION),
   }
 }
 
