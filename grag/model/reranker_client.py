@@ -1,189 +1,359 @@
 """grag.model.reranker_client
 
-重排序客户端（Reranker Client）
+重排序客户端。
 
-职责：
-- 创建和管理重排序模型实例
-- 对检索结果进行相关性重排序
-- 支持多种重排序提供商
-- 集成配置层进行参数配置
-
-说明：
-- 重排序是可选功能，用于改进检索结果质量
-- 支持基于交叉编码器的重排序
-- 可以与向量检索结合使用
-- 提供批处理重排序能力
-
-环境变量覆盖优先级（高 -> 低）：
-- GRAG_RERANKER_PROVIDER
-- GRAG_RERANKER_MODEL
-- GRAG_RERANKER_BASE_URL
-- GRAG_RERANKER_API_KEY
-- grag_config.yaml 中的配置
+当前实现重点支持：
+- vLLM reranker 服务
+- 兼容 /v1/rerank 与 /v1/score
+- 失败时稳定降级为原始顺序
 """
 
+import json
 import os
-from typing import List, Optional, Dict, Any, Tuple, Union
-from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+from urllib import error, request
 
-from langchain_openai import OpenAIEmbeddings
-from ..config import get_config_manager, ProviderType
+from ..config import ProviderType, get_config_manager
 
 
 class RerankerClient:
-    """重排序客户端类
-
-    提供检索结果重排序服务，用于提高检索结果的相关性。
-    """
+    """统一的重排序客户端。"""
 
     def __init__(self, provider_name: Optional[str] = None):
-        """初始化重排序客户端
-
-        Args:
-            provider_name: 提供商名称，如果为None则使用默认提供商
-        """
         self.provider_name = provider_name
         self._reranker = None
         self._settings = get_config_manager().get_settings()
 
     def is_available(self) -> bool:
-        """检查重排序服务是否可用
-
-        Returns:
-            是否配置了重排序提供商
-        """
+        """检查当前 provider 是否已配置。"""
         try:
             provider_config = self._settings.get_provider_config(
                 ProviderType.RERANKER,
-                self.provider_name
+                self.provider_name,
             )
             return provider_config is not None
-        except:
+        except Exception:
             return False
 
     def get_reranker(self):
-        """获取或创建重排序器实例
-
-        Returns:
-            重排序器实例
-
-        Raises:
-            RuntimeError: 配置初始化失败或重排序器创建失败
-        """
+        """获取或懒加载重排序器实例。"""
         if self._reranker is None and self.is_available():
             self._reranker = self._create_reranker()
         return self._reranker
 
     def _create_reranker(self):
-        """根据配置创建重排序器实例
-
-        Returns:
-            配置好的重排序器实例
-
-        Raises:
-            ValueError: 配置无效或缺少必需参数
-        """
-        # 获取提供商配置
+        """根据配置创建重排序器实例。"""
         provider_config = self._settings.get_provider_config(
             ProviderType.RERANKER,
-            self.provider_name
+            self.provider_name,
         )
 
-        # 环境变量覆盖
+        provider_name = self.provider_name or self._settings.reranker_provider
         model = self._get_env_override("GRAG_RERANKER_MODEL") or provider_config.model
         base_url = self._get_env_override("GRAG_RERANKER_BASE_URL") or provider_config.base_url
-        top_k = provider_config.top_k
         timeout = provider_config.timeout
-
-        # API Key获取
+        default_top_k = provider_config.top_k
         api_key = self._get_api_key(provider_config)
 
-        provider_name = self.provider_name or self._settings.reranker_provider
+        if provider_name == "vllm":
+            return self._create_vllm_reranker(
+                model=model,
+                api_key=api_key,
+                base_url=base_url,
+                timeout=timeout,
+                default_top_k=default_top_k,
+            )
+
+        if provider_name in {"ollama", "lmstudio"}:
+            return self._create_endpoint_reranker(
+                model=model,
+                api_key=api_key,
+                base_url=base_url,
+                timeout=timeout,
+                default_top_k=default_top_k,
+                rerank_paths=["/v1/rerank", "/rerank", "/v2/rerank"],
+            )
+
+        if provider_name in {"siliconflow", "openai", "openai_compatible"}:
+            return self._create_endpoint_reranker(
+                model=model,
+                api_key=api_key,
+                base_url=base_url,
+                timeout=timeout,
+                default_top_k=default_top_k,
+                rerank_paths=["/v1/rerank"],
+            )
+
+        return self._create_default_reranker()
+
+    def _create_vllm_reranker(
+        self,
+        model: str,
+        api_key: Optional[str],
+        base_url: Optional[str],
+        timeout: int,
+        default_top_k: int,
+    ):
+        """创建兼容 vLLM rerank/score 的重排序器。"""
+        if not base_url:
+            raise ValueError("vLLM reranker 缺少 base_url 配置")
+
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        base = self._normalize_base_url(base_url)
+        rerank_endpoints = self._join_paths(base, ["/v1/rerank", "/rerank", "/v2/rerank"])
+        score_endpoints = self._join_paths(base, ["/v1/score", "/score"])
+
+        class VLLMReranker:
+            def __init__(self, outer: "RerankerClient"):
+                self._outer = outer
+
+            def rerank(
+                self,
+                query: str,
+                documents: List[str],
+                top_k: Optional[int] = None,
+            ) -> List[Tuple[str, float]]:
+                if not documents:
+                    return []
+
+                limit = top_k if top_k is not None else default_top_k
+
+                rerank_errors: List[str] = []
+                rerank_payloads = [
+                    {
+                        "model": model,
+                        "query": query,
+                        "documents": documents,
+                        "top_n": limit,
+                    },
+                    {
+                        "model": model,
+                        "query": query,
+                        "documents": [{"text": doc} for doc in documents],
+                        "top_n": limit,
+                    },
+                ]
+
+                for endpoint in rerank_endpoints:
+                    for payload in rerank_payloads:
+                        try:
+                            response = self._outer._post_json(
+                                url=endpoint,
+                                payload=payload,
+                                headers=headers,
+                                timeout=timeout,
+                            )
+                            parsed = self._outer._parse_rerank_response(
+                                response=response,
+                                documents=documents,
+                                top_k=limit,
+                            )
+                            if parsed:
+                                return parsed
+                        except Exception as exc:
+                            rerank_errors.append(f"{endpoint}: {exc}")
+
+                score_results: List[Tuple[str, float]] = []
+                score_errors: List[str] = []
+                for index, doc in enumerate(documents):
+                    score = None
+                    for endpoint in score_endpoints:
+                        payload = {
+                            "model": model,
+                            "text_1": query,
+                            "text_2": doc,
+                        }
+                        try:
+                            response = self._outer._post_json(
+                                url=endpoint,
+                                payload=payload,
+                                headers=headers,
+                                timeout=timeout,
+                            )
+                            score = self._outer._parse_score_response(response)
+                            break
+                        except Exception as exc:
+                            score_errors.append(f"{endpoint}[{index}]: {exc}")
+
+                    if score is None:
+                        raise RuntimeError(
+                            "; ".join(rerank_errors + score_errors)
+                            or "vLLM rerank/score 请求失败"
+                        )
+                    score_results.append((doc, score))
+
+                score_results.sort(key=lambda item: item[1], reverse=True)
+                return score_results[:limit]
+
+        return VLLMReranker(self)
+
+    def _create_endpoint_reranker(
+        self,
+        model: str,
+        api_key: Optional[str],
+        base_url: Optional[str],
+        timeout: int,
+        default_top_k: int,
+        rerank_paths: List[str],
+    ):
+        """创建通用 endpoint 型 reranker。"""
+        if not base_url:
+            raise ValueError("reranker 缺少 base_url 配置")
+
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        endpoints = self._join_paths(self._normalize_base_url(base_url), rerank_paths)
+
+        class EndpointReranker:
+            def __init__(self, outer: "RerankerClient"):
+                self._outer = outer
+
+            def rerank(
+                self,
+                query: str,
+                documents: List[str],
+                top_k: Optional[int] = None,
+            ) -> List[Tuple[str, float]]:
+                if not documents:
+                    return []
+
+                limit = top_k if top_k is not None else default_top_k
+                payload = {
+                    "model": model,
+                    "query": query,
+                    "documents": documents,
+                    "top_n": limit,
+                }
+
+                errors_seen: List[str] = []
+                for endpoint in endpoints:
+                    try:
+                        response = self._outer._post_json(
+                            url=endpoint,
+                            payload=payload,
+                            headers=headers,
+                            timeout=timeout,
+                        )
+                        parsed = self._outer._parse_rerank_response(
+                            response=response,
+                            documents=documents,
+                            top_k=limit,
+                        )
+                        if parsed:
+                            return parsed
+                    except Exception as exc:
+                        errors_seen.append(f"{endpoint}: {exc}")
+
+                raise RuntimeError("; ".join(errors_seen) or "rerank 请求失败")
+
+        return EndpointReranker(self)
+
+    def _normalize_base_url(self, base_url: str) -> str:
+        return str(base_url or "").strip().rstrip("/")
+
+    def _join_paths(self, base_url: str, paths: List[str]) -> List[str]:
+        urls: List[str] = []
+        for path in paths:
+            if not path.startswith("/"):
+                path = "/" + path
+            if base_url.endswith("/v1") and path.startswith("/v1/"):
+                candidate = base_url + path[3:]
+            else:
+                candidate = base_url + path
+            if candidate not in urls:
+                urls.append(candidate)
+        return urls
+
+    def _post_json(
+        self,
+        url: str,
+        payload: Dict[str, Any],
+        headers: Dict[str, str],
+        timeout: int,
+    ) -> Dict[str, Any]:
+        req = request.Request(
+            url=url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with request.urlopen(req, timeout=timeout) as resp:
+                raw = resp.read().decode("utf-8")
+        except error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="ignore")
+            raise RuntimeError(f"HTTP {exc.code} {detail}".strip()) from exc
+        except error.URLError as exc:
+            raise RuntimeError(f"网络错误: {exc.reason}") from exc
 
         try:
-            if provider_name in ["siliconflow", "openai"]:
-                # 使用OpenAI兼容的重排序API
-                if not api_key and base_url and not self._is_local_url(base_url):
-                    raise ValueError(f"API Key 不能为空 (provider: {provider_name})")
+            data = json.loads(raw) if raw else {}
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"响应不是合法 JSON: {raw[:200]}") from exc
 
-                # 这里可以集成具体的重排序实现
-                # 例如使用sentence-transformers或专门的重排序API
-                reranker = self._create_openai_reranker(
-                    model=model,
-                    api_key=api_key,
-                    base_url=base_url,
-                    timeout=timeout
-                )
-            else:
-                # 其他重排序实现
-                reranker = self._create_default_reranker()
+        if not isinstance(data, dict):
+            raise RuntimeError(f"响应格式异常: {type(data).__name__}")
+        if data.get("error"):
+            raise RuntimeError(str(data["error"]))
+        return data
 
-            return reranker
+    def _parse_rerank_response(
+        self,
+        response: Dict[str, Any],
+        documents: List[str],
+        top_k: Optional[int],
+    ) -> List[Tuple[str, float]]:
+        raw_results = response.get("results")
+        if raw_results is None:
+            raw_results = response.get("data")
+        if not isinstance(raw_results, list):
+            raise RuntimeError(f"响应缺少 results/data 字段: {response}")
 
-        except Exception as e:
-            raise RuntimeError(f"创建重排序器失败: {e}") from e
+        reranked: List[Tuple[str, float]] = []
+        for item in raw_results:
+            if not isinstance(item, dict):
+                continue
+            index = item.get("index")
+            if not isinstance(index, int) or index < 0 or index >= len(documents):
+                continue
+            score = item.get("relevance_score", item.get("score", 0.0))
+            try:
+                score_value = float(score)
+            except Exception:
+                score_value = 0.0
+            reranked.append((documents[index], score_value))
 
-    def _create_openai_reranker(self, model: str, api_key: Optional[str],
-                               base_url: Optional[str], timeout: int):
-        """创建基于OpenAI的重排序器
+        if top_k is not None:
+            reranked = reranked[:top_k]
+        if not reranked:
+            raise RuntimeError(f"响应中没有可用的 rerank 结果: {response}")
+        return reranked
 
-        Args:
-            model: 模型名称
-            api_key: API密钥
-            base_url: 基础URL
-            timeout: 超时时间
-
-        Returns:
-            重排序器实例
-        """
-        # 这里实现具体的重排序逻辑
-        # 可以调用重排序API或使用本地模型
-        class OpenAIReranker:
-            def __init__(self, model: str, api_key: str, base_url: str, timeout: int):
-                self.model = model
-                self.api_key = api_key
-                self.base_url = base_url
-                self.timeout = timeout
-
-            def rerank(self, query: str, documents: List[str],
-                      top_k: Optional[int] = None) -> List[Tuple[str, float]]:
-                """重排序文档列表
-
-                Args:
-                    query: 查询字符串
-                    documents: 文档列表
-                    top_k: 返回前K个结果
-
-                Returns:
-                    重排序后的文档和得分列表
-                """
-                # 简化实现：返回原始顺序（实际应该调用重排序API）
-                results = [(doc, 1.0) for doc in documents]
-                if top_k:
-                    results = results[:top_k]
-                return results
-
-        return OpenAIReranker(model, api_key or "EMPTY", base_url, timeout)
+    def _parse_score_response(self, response: Dict[str, Any]) -> float:
+        raw_data = response.get("data")
+        if isinstance(raw_data, list) and raw_data:
+            item = raw_data[0]
+            if isinstance(item, dict):
+                score = item.get("score")
+                if score is not None:
+                    return float(score)
+        if "score" in response:
+            return float(response["score"])
+        raise RuntimeError(f"响应缺少 score 字段: {response}")
 
     def _create_default_reranker(self):
-        """创建默认重排序器
-
-        Returns:
-            默认重排序器实例
-        """
         class DefaultReranker:
-            def rerank(self, query: str, documents: List[str],
-                      top_k: Optional[int] = None) -> List[Tuple[str, float]]:
-                """默认重排序：保持原始顺序
-
-                Args:
-                    query: 查询字符串
-                    documents: 文档列表
-                    top_k: 返回前K个结果
-
-                Returns:
-                    文档和得分列表
-                """
+            def rerank(
+                self,
+                query: str,
+                documents: List[str],
+                top_k: Optional[int] = None,
+            ) -> List[Tuple[str, float]]:
                 results = [(doc, 1.0) for doc in documents]
                 if top_k:
                     results = results[:top_k]
@@ -192,89 +362,34 @@ class RerankerClient:
         return DefaultReranker()
 
     def _get_api_key(self, provider_config) -> Optional[str]:
-        """获取API Key
-
-        Args:
-            provider_config: 提供商配置对象
-
-        Returns:
-            API Key字符串或None
-        """
-        # 1. 通用环境变量
         api_key = os.environ.get("GRAG_RERANKER_API_KEY")
         if api_key:
             return api_key
-
-        # 2. 提供商指定的环境变量
-        if hasattr(provider_config, 'api_key_env') and provider_config.api_key_env:
+        if hasattr(provider_config, "api_key_env") and provider_config.api_key_env:
             api_key = os.environ.get(provider_config.api_key_env)
             if api_key:
                 return api_key
-
-        # 3. 特定提供商的兼容环境变量
-        provider_name = self.provider_name or self._settings.reranker_provider
-        if provider_name == "siliconflow":
-            api_key = os.environ.get("SILICONFLOW_API_KEY")
-            if api_key:
-                return api_key
-
-        # 4. 对于本地服务，返回占位符
         if provider_config.base_url and self._is_local_url(provider_config.base_url):
             return "EMPTY"
-
         return None
 
     def _get_env_override(self, env_var: str) -> Optional[str]:
-        """获取环境变量覆盖值
-
-        Args:
-            env_var: 环境变量名
-
-        Returns:
-            环境变量值或None
-        """
         return os.environ.get(env_var)
 
     def _is_local_url(self, url: str) -> bool:
-        """判断是否为本地URL
-
-        Args:
-            url: URL字符串
-
-        Returns:
-            是否为本地地址
-        """
         if not url:
             return False
-
-        local_indicators = [
-            "localhost",
-            "127.0.0.1",
-            "0.0.0.0",
-            "local",
-            ".local"
-        ]
-
+        local_indicators = ["localhost", "127.0.0.1", "0.0.0.0", "local", ".local"]
         url_lower = url.lower()
         return any(indicator in url_lower for indicator in local_indicators)
 
-    def rerank(self, query: str, documents: List[str],
-              top_k: Optional[int] = None) -> List[Tuple[str, float]]:
-        """重排序文档列表
-
-        Args:
-            query: 查询字符串
-            documents: 文档列表
-            top_k: 返回前K个结果，如果为None则返回所有结果
-
-        Returns:
-            重排序后的文档和得分列表 [(document, score), ...]
-
-        Raises:
-            RuntimeError: 重排序失败
-        """
+    def rerank(
+        self,
+        query: str,
+        documents: List[str],
+        top_k: Optional[int] = None,
+    ) -> List[Tuple[str, float]]:
         if not self.is_available():
-            # 如果没有配置重排序，返回原始顺序
             results = [(doc, 1.0) for doc in documents]
             if top_k:
                 results = results[:top_k]
@@ -284,7 +399,6 @@ class RerankerClient:
             reranker = self.get_reranker()
             return reranker.rerank(query, documents, top_k)
         except Exception as e:
-            # 重排序失败时返回原始顺序
             print(f"重排序失败，使用原始顺序: {e}")
             results = [(doc, 1.0) for doc in documents]
             if top_k:
@@ -292,38 +406,22 @@ class RerankerClient:
             return results
 
     def test_connection(self) -> bool:
-        """测试重排序服务连接
-
-        Returns:
-            连接是否成功
-        """
         if not self.is_available():
             return False
-
         try:
-            # 尝试重排序测试数据
-            test_query = "test query"
-            test_docs = ["doc1", "doc2", "doc3"]
-            results = self.rerank(test_query, test_docs, top_k=2)
+            results = self.rerank("test query", ["doc1", "doc2", "doc3"], top_k=2)
             return len(results) > 0
         except Exception as e:
             print(f"重排序连接测试失败: {e}")
             return False
 
     def get_provider_info(self) -> Dict[str, Any]:
-        """获取提供商信息
-
-        Returns:
-            提供商信息字典
-        """
         if not self.is_available():
             return {"available": False}
-
         provider_config = self._settings.get_provider_config(
             ProviderType.RERANKER,
-            self.provider_name
+            self.provider_name,
         )
-
         return {
             "provider_name": self.provider_name or self._settings.reranker_provider,
             "model": provider_config.model,
@@ -334,71 +432,34 @@ class RerankerClient:
         }
 
     def refresh_reranker(self) -> None:
-        """刷新重排序器实例（强制重新创建）
-
-        用于配置变更后重新初始化模型。
-        """
         self._reranker = None
 
 
-# 全局重排序客户端实例
 _default_reranker_client: Optional[RerankerClient] = None
 
 
 def get_reranker_client(provider_name: Optional[str] = None) -> RerankerClient:
-    """获取重排序客户端实例
-
-    Args:
-        provider_name: 提供商名称
-
-    Returns:
-        RerankerClient实例
-    """
     global _default_reranker_client
     if _default_reranker_client is None or provider_name is not None:
         _default_reranker_client = RerankerClient(provider_name)
     return _default_reranker_client
 
 
-def rerank_documents(query: str, documents: List[str],
-                    top_k: Optional[int] = None,
-                    provider_name: Optional[str] = None) -> List[Tuple[str, float]]:
-    """重排序文档列表
-
-    Args:
-        query: 查询字符串
-        documents: 文档列表
-        top_k: 返回前K个结果
-        provider_name: 提供商名称
-
-    Returns:
-        重排序后的文档和得分列表
-    """
+def rerank_documents(
+    query: str,
+    documents: List[str],
+    top_k: Optional[int] = None,
+    provider_name: Optional[str] = None,
+) -> List[Tuple[str, float]]:
     client = get_reranker_client(provider_name)
     return client.rerank(query, documents, top_k)
 
 
 def is_reranker_available(provider_name: Optional[str] = None) -> bool:
-    """检查重排序服务是否可用
-
-    Args:
-        provider_name: 提供商名称
-
-    Returns:
-        是否可用
-    """
     client = get_reranker_client(provider_name)
     return client.is_available()
 
 
 def test_reranker_connection(provider_name: Optional[str] = None) -> bool:
-    """测试重排序连接
-
-    Args:
-        provider_name: 提供商名称
-
-    Returns:
-        连接是否成功
-    """
     client = get_reranker_client(provider_name)
     return client.test_connection()

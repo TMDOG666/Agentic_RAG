@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from dataclasses import dataclass
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -349,11 +350,96 @@ def _build_entities_json_for_prompt(cluster: EntityCluster) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
+def _sanitize_json_output(raw: str) -> str:
+    """清洗模型输出，移除思考内容、代码块和首尾解释文本。"""
+    text = (raw or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"```(?:json)?", "", text, flags=re.IGNORECASE)
+    text = text.replace("```", "").strip()
+    return text
+
+
+def _extract_first_json_value(raw: str) -> str:
+    """从混杂文本中抽取第一个完整 JSON 值。"""
+    text = _sanitize_json_output(raw)
+    if not text:
+        return ""
+
+    start = -1
+    open_char = ""
+    close_char = ""
+    for idx, ch in enumerate(text):
+        if ch in "[{":
+            start = idx
+            open_char = ch
+            close_char = "]" if ch == "[" else "}"
+            break
+    if start < 0:
+        return text
+
+    depth = 0
+    in_string = False
+    escape = False
+    for idx in range(start, len(text)):
+        ch = text[idx]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == open_char:
+            depth += 1
+        elif ch == close_char:
+            depth -= 1
+            if depth == 0:
+                return text[start : idx + 1]
+    return text[start:]
+
+
+def _fallback_fused_entities_from_cluster(cluster: EntityCluster) -> List[FusedEntity]:
+    """当 LLM 融合失败时，按名称做保守兜底，避免整篇文档没有实体。"""
+    by_name: Dict[str, List[EntityForFusion]] = {}
+    for member in cluster.members:
+        name = _normalize_name(member.name)
+        if not name:
+            continue
+        by_name.setdefault(name, []).append(member)
+
+    out: List[FusedEntity] = []
+    for canonical_name, members in by_name.items():
+        descriptions = [m.description.strip() for m in members if (m.description or "").strip()]
+        aliases = sorted(
+            {
+                _normalize_name(m.name)
+                for m in members
+                if _normalize_name(m.name) and _normalize_name(m.name) != canonical_name
+            }
+        )
+        entity_type = next((m.type.strip() for m in members if (m.type or "").strip()), "")
+        description = max(descriptions, key=len) if descriptions else ""
+        out.append(
+            FusedEntity(
+                canonical_name=canonical_name,
+                type=entity_type or "Unknown",
+                aliases=aliases,
+                description=description,
+            )
+        )
+    return out
+
+
 def _parse_fused_entities_json(raw: str) -> Tuple[List[FusedEntity], List[str]]:
     """解析 LLM 融合输出 JSON。"""
 
     errors: List[str] = []
-    txt = (raw or "").strip()
+    txt = _extract_first_json_value(raw)
     if not txt:
         return [], ["empty LLM fusion output"]
 
@@ -425,6 +511,9 @@ async def fuse_one_cluster(
         else:
             llm_raw = await asyncio.to_thread(llm_chat_fn, prompt)
         fused, parse_errors = _parse_fused_entities_json(llm_raw)
+        if not fused:
+            fused = _fallback_fused_entities_from_cluster(cluster)
+            parse_errors.append("fusion fallback: use cluster members as fused entities")
         if monitor is not None:
             monitor.observe("fusion.llm_fused_entities", float(len(fused)))
             if parse_errors:
@@ -434,7 +523,11 @@ async def fuse_one_cluster(
         monitor = get_current_monitor()
         if monitor is not None:
             monitor.inc("fusion.llm_errors", 1)
-        return cluster, [], [f"LLM fusion failed: {type(e).__name__}: {e}"]
+        return (
+            cluster,
+            _fallback_fused_entities_from_cluster(cluster),
+            [f"LLM fusion failed: {type(e).__name__}: {e}", "fusion fallback: use cluster members as fused entities"],
+        )
 
 
 async def fuse_clusters(

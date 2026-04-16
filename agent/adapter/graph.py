@@ -1,4 +1,4 @@
-"""LangGraph assembly for the skills-enabled agent."""
+"""LangGraph 工作流组装模块。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from langgraph.prebuilt import ToolNode, tools_condition
 
 
 def create_system_prompt(skill_manager) -> str:
-    """Build the system prompt used for every model invocation."""
+    """构造每次模型调用都会注入的 system prompt。"""
     return (
         "你是一个有帮助的智能助手。\n\n"
         "重要规则：\n"
@@ -35,9 +35,14 @@ def create_system_prompt(skill_manager) -> str:
 
 
 def build_graph(*, model, tools, system_prompt: str):
-    """Assemble the agent -> tools -> agent loop."""
+    """组装 Agent -> Tools -> Agent 的 LangGraph 循环。"""
 
     def agent_node(state: MessagesState):
+        """模型推理节点。
+
+        这里会把 tools 绑定到模型上，让模型可以通过 function calling
+        触发工具执行。
+        """
         bound_model = model.bind_tools(tools)
 
         try:
@@ -66,9 +71,15 @@ def build_graph(*, model, tools, system_prompt: str):
             raise
 
     workflow = StateGraph(MessagesState)
+
+    # `agent` 负责推理与决策，`tools` 负责执行 function calling。
     workflow.add_node("agent", agent_node)
     workflow.add_node("tools", ToolNode(tools))
+
+    # 入口先到 agent，让模型决定是否需要调用工具。
     workflow.add_edge(START, "agent")
+
+    # 如果模型输出了 tool_calls，就进入 tools；否则结束本轮。
     workflow.add_conditional_edges(
         "agent",
         tools_condition,
@@ -77,5 +88,7 @@ def build_graph(*, model, tools, system_prompt: str):
             END: END,
         },
     )
+
+    # 工具执行结束后回到 agent，让模型继续整合结果。
     workflow.add_edge("tools", "agent")
     return workflow.compile()

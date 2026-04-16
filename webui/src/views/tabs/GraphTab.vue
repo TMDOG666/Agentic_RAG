@@ -1,70 +1,85 @@
 <template>
-  <div style="display: grid; gap: 12px">
-    <el-card shadow="never" style="border-radius: 12px">
+  <div class="page-grid">
+    <el-card shadow="never" class="view-card">
       <template #header>
-        <div style="display: flex; align-items: center; justify-content: space-between">
-          <div style="font-weight: 600">图谱展示（Neo4j）</div>
-          <div style="display: flex; gap: 8px">
-            <el-input v-model="docId" placeholder="可选：doc_id 过滤" style="max-width: 320px" />
-            <el-button @click="loadGraph" :loading="graphLoading">刷新</el-button>
+        <div class="graph-header">
+          <div>
+            <div class="section-title">图谱视图</div>
+            <div class="section-subtitle">优先展示当前分组图谱，也支持按 `doc_id` 单文档过滤。</div>
+          </div>
+          <div class="graph-header__actions">
+            <el-input v-model="docId" placeholder="可选：doc_id 过滤" class="glass-input" style="max-width: 320px" />
+            <el-button @click="loadGraph" :loading="graphLoading">刷新图谱</el-button>
           </div>
         </div>
       </template>
 
-      <div
-        ref="graphEl"
-        style="height: 460px; background: #fff; border-radius: 8px; border: 1px solid var(--el-border-color)"
-      />
+      <div class="graph-stage">
+        <div ref="graphEl" class="graph-canvas" />
+        <div class="graph-hint">
+          <span>点击图节点可尝试打开对应实体。</span>
+          <span v-if="graphSummary">{{ graphSummary }}</span>
+        </div>
+      </div>
     </el-card>
 
-    <el-card shadow="never" style="border-radius: 12px">
+    <el-card shadow="never" class="view-card">
       <template #header>
-        <div style="display: flex; align-items: center; justify-content: space-between">
-          <div style="font-weight: 600">节点（Entities CRUD - Postgres）</div>
-          <div style="display: flex; gap: 8px">
-            <el-button type="primary" @click="openCreate">新增节点</el-button>
+        <div class="graph-header">
+          <div>
+            <div class="section-title">实体列表</div>
+            <div class="section-subtitle">这里是 Postgres 中可编辑的实体资产，和 Neo4j 图谱相互配合。</div>
+          </div>
+          <div class="graph-header__actions">
+            <el-button type="primary" @click="openCreate">新增实体</el-button>
             <el-button @click="loadEntities" :loading="entitiesLoading">刷新</el-button>
           </div>
         </div>
       </template>
 
-      <el-table :data="entities" v-loading="entitiesLoading" row-key="entity_id" style="width: 100%">
-        <el-table-column prop="entity_id" label="entity_id" width="280" />
-        <el-table-column prop="canonical_name" label="canonical_name" />
-        <el-table-column prop="type" label="type" width="120" />
-        <el-table-column prop="doc_id" label="doc_id" width="240" />
-        <el-table-column label="操作" width="200">
+      <el-table :data="entities" v-loading="entitiesLoading" row-key="entity_id" class="shell-table" empty-text="暂无实体">
+        <el-table-column prop="canonical_name" label="名称" min-width="180" />
+        <el-table-column prop="type" label="类型" width="120" />
+        <el-table-column prop="doc_id" label="Doc ID" min-width="200" />
+        <el-table-column prop="entity_id" label="Entity ID" min-width="260">
           <template #default="scope">
-            <el-button size="small" @click="openEdit(scope.row)">编辑</el-button>
-            <el-button size="small" type="danger" @click="remove(scope.row)">删除</el-button>
+            <span class="mono entity-id">{{ scope.row.entity_id }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="180">
+          <template #default="scope">
+            <div class="table-actions">
+              <el-button size="small" @click="openEdit(scope.row)">编辑</el-button>
+              <el-button size="small" type="danger" @click="remove(scope.row)">删除</el-button>
+            </div>
           </template>
         </el-table-column>
       </el-table>
     </el-card>
 
-    <el-dialog v-model="dlg" title="节点" width="680px">
+    <el-dialog v-model="dlg" :title="editing ? '编辑实体' : '新增实体'" width="680px" append-to-body align-center>
       <el-form label-width="110px">
         <el-form-item label="entity_id">
-          <el-input v-model="form.entity_id" placeholder="可选：不填则服务端生成" :disabled="editing" />
+          <el-input v-model="form.entity_id" :disabled="editing" placeholder="留空则由服务端生成" class="glass-input" />
         </el-form-item>
         <el-form-item label="doc_id">
-          <el-input v-model="form.doc_id" placeholder="必填：实体所属 doc_id" />
+          <el-input v-model="form.doc_id" placeholder="实体所属 doc_id" class="glass-input" />
         </el-form-item>
         <el-form-item label="canonical_name">
-          <el-input v-model="form.canonical_name" />
+          <el-input v-model="form.canonical_name" class="glass-input" />
         </el-form-item>
         <el-form-item label="type">
-          <el-input v-model="form.type" />
+          <el-input v-model="form.type" class="glass-input" />
         </el-form-item>
         <el-form-item label="aliases">
-          <el-input v-model="form.aliases" placeholder="逗号分隔" />
+          <el-input v-model="form.aliases" placeholder="逗号分隔" class="glass-input" />
         </el-form-item>
         <el-form-item label="description">
-          <el-input v-model="form.description" type="textarea" :rows="4" />
+          <el-input v-model="form.description" type="textarea" :rows="4" class="glass-input" />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="dlg=false">取消</el-button>
+        <el-button @click="dlg = false">取消</el-button>
         <el-button type="primary" :loading="saving" @click="save">保存</el-button>
       </template>
     </el-dialog>
@@ -72,10 +87,9 @@
 </template>
 
 <script setup>
-import { nextTick, onMounted, onBeforeUnmount, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '../../lib/api'
-
 import { Network } from 'vis-network'
 
 const props = defineProps({
@@ -83,9 +97,9 @@ const props = defineProps({
 })
 
 const docId = ref('')
-
 const graphLoading = ref(false)
 const graphEl = ref(null)
+const graphSummary = ref('')
 let network = null
 
 const entitiesLoading = ref(false)
@@ -103,7 +117,7 @@ const form = reactive({
   description: '',
 })
 
-function _graphToFlow(g) {
+function graphToFlow(g) {
   const nodesIn = Array.isArray(g?.nodes) ? g.nodes : []
   const edgesIn = Array.isArray(g?.edges) ? g.edges : []
 
@@ -122,13 +136,18 @@ function _graphToFlow(g) {
     }
     usedNodeIds.add(id)
     if (name && !nameToId.has(name)) nameToId.set(name, id)
-    const label = String(n?.label ?? (name || n?.canonical_name) ?? id)
+
     return {
       id,
-      label,
+      label: String(n?.label ?? name ?? id),
       shape: 'dot',
-      size: 14,
-      font: { size: 12 },
+      size: 16,
+      color: {
+        background: '#f3e6d8',
+        border: '#1d5c63',
+        highlight: { background: '#ffd5b8', border: '#a35b32' },
+      },
+      font: { color: '#1f2a33', size: 13, face: 'Segoe UI', strokeWidth: 0 },
     }
   })
 
@@ -139,7 +158,6 @@ function _graphToFlow(g) {
       const tailName = String(e?.tail_name ?? '').trim()
       const from = String(e?.source ?? e?.from ?? e?.start ?? nameToId.get(headName) ?? headName ?? '').trim()
       const to = String(e?.target ?? e?.to ?? e?.end ?? nameToId.get(tailName) ?? tailName ?? '').trim()
-      const label = String(e?.label ?? e?.type ?? '')
       const baseEdgeId = String(e?.id ?? e?.relation_id ?? `${from}-${to}-${idx}`)
       let id = baseEdgeId
       let bump = 2
@@ -152,9 +170,11 @@ function _graphToFlow(g) {
         id,
         from,
         to,
-        label,
+        label: String(e?.label ?? e?.type ?? ''),
         arrows: 'to',
-        font: { align: 'middle', size: 10 },
+        color: { color: '#7b8f99', highlight: '#cf7a49' },
+        font: { align: 'middle', size: 10, color: '#4e5d68' },
+        smooth: { type: 'dynamic' },
       }
     })
     .filter((e) => e.from && e.to)
@@ -162,23 +182,22 @@ function _graphToFlow(g) {
   return { ns, es }
 }
 
-async function _openEntityById(entityId) {
+async function openEntityById(entityId) {
   const eid = String(entityId || '').trim()
   if (!eid) return
-
   try {
     const res = await api.get(`/entities/${encodeURIComponent(eid)}`, { params: { group_id: props.groupId } })
     if (!res.data) {
-      ElMessage.warning('未找到对应实体（该节点可能来自 Neo4j，但不在 entities 表中）')
+      ElMessage.warning('没有找到对应实体，可能该节点仅存在于图数据库中。')
       return
     }
     openEdit(res.data)
-  } catch (e) {
-    ElMessage.warning('无法打开节点编辑（可能该节点不支持 CRUD）')
+  } catch {
+    ElMessage.warning('该节点当前不支持直接编辑。')
   }
 }
 
-function _ensureNetwork() {
+function ensureNetwork() {
   if (network || !graphEl.value) return
   network = new Network(
     graphEl.value,
@@ -186,12 +205,12 @@ function _ensureNetwork() {
     {
       autoResize: true,
       interaction: { hover: true },
-      physics: { stabilization: true },
+      physics: { stabilization: true, barnesHut: { springLength: 160 } },
     },
   )
   network.on('click', (params) => {
     const nodeId = params?.nodes?.[0]
-    if (nodeId) _openEntityById(nodeId)
+    if (nodeId) openEntityById(nodeId)
   })
 }
 
@@ -201,20 +220,16 @@ async function loadGraph() {
     const res = await api.get(`/groups/${encodeURIComponent(props.groupId)}/graph`, {
       params: { limit: 200, doc_id: docId.value.trim() || undefined },
     })
-    const { ns, es } = _graphToFlow(res.data)
+    const { ns, es } = graphToFlow(res.data)
+    graphSummary.value = ns.length ? `nodes=${ns.length}，edges=${es.length}` : '当前没有返回图谱数据'
 
     await nextTick()
-    _ensureNetwork()
-
-    if (!ns.length) {
-      ElMessage.warning('图谱为空：未返回任何节点（nodes=0）')
-    } else {
-      ElMessage.info(`图谱数据：nodes=${ns.length}, edges=${es.length}`)
-    }
-
+    ensureNetwork()
     if (network) {
       network.setData({ nodes: ns, edges: es })
-      network.fit({ animation: { duration: 300 } })
+      if (ns.length) {
+        network.fit({ animation: { duration: 300 } })
+      }
     }
   } catch (e) {
     const msg = e?.response?.data?.detail || e?.message || '加载图谱失败'
@@ -267,7 +282,7 @@ async function save() {
   }
 
   if (!payload.doc_id || !payload.canonical_name) {
-    ElMessage.warning('doc_id / canonical_name 必填')
+    ElMessage.warning('doc_id 和 canonical_name 必填')
     return
   }
 
@@ -275,10 +290,10 @@ async function save() {
   try {
     if (editing.value) {
       await api.put(`/entities/${encodeURIComponent(form.entity_id)}`, payload, { params: { group_id: props.groupId } })
-      ElMessage.success('已更新')
+      ElMessage.success('实体已更新')
     } else {
       await api.post('/entities', payload, { params: { group_id: props.groupId } })
-      ElMessage.success('已创建')
+      ElMessage.success('实体已创建')
     }
     dlg.value = false
     await loadEntities()
@@ -289,9 +304,9 @@ async function save() {
 }
 
 async function remove(row) {
-  await ElMessageBox.confirm(`确认删除 entity_id=${row.entity_id} ?`, '删除确认', { type: 'warning' })
+  await ElMessageBox.confirm(`确认删除 entity_id=${row.entity_id} ？`, '删除确认', { type: 'warning' })
   await api.delete(`/entities/${encodeURIComponent(row.entity_id)}`, { params: { group_id: props.groupId } })
-  ElMessage.success('已删除')
+  ElMessage.success('实体已删除')
   await loadEntities()
   await loadGraph()
 }
@@ -311,3 +326,51 @@ onBeforeUnmount(() => {
 })
 </script>
 
+<style scoped>
+.graph-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.graph-header__actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.graph-stage {
+  display: grid;
+  gap: 12px;
+}
+
+.graph-canvas {
+  height: 520px;
+  border-radius: 20px;
+  border: 1px solid var(--line-soft);
+  background:
+    radial-gradient(circle at top left, rgba(29, 92, 99, 0.1), transparent 18%),
+    linear-gradient(180deg, #fbfaf7, #f4f7f9);
+}
+
+.graph-hint {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--text-sub);
+}
+
+.entity-id {
+  font-size: 12px;
+  color: var(--text-sub);
+}
+
+@media (max-width: 900px) {
+  .graph-header {
+    flex-direction: column;
+  }
+}
+</style>

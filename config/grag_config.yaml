@@ -15,13 +15,13 @@
 # ============================================================================
 
 # 默认使用的 LLM 提供商（必须存在于 llm_providers 下）
-llm_provider: siliconflow
+llm_provider: minimax
 
 # 默认使用的向量嵌入模型提供商（必须存在于 embedding_providers 下）
-embedding_provider: siliconflow
+embedding_provider: vllm
 
 # 默认使用的重排序模型提供商（可选；必须存在于 reranker_providers 下）
-reranker_provider: siliconflow
+reranker_provider: vllm
 
 # 默认使用的视觉模型提供商（用于 OCR / 图像理解；必须存在于 vision_providers 下）
 vision_provider: siliconflow
@@ -50,6 +50,14 @@ llm_providers:
     model: Qwen/Qwen3.5-27B
     base_url: https://api.siliconflow.cn/v1
     api_key_env: SILICONFLOW_API_KEY
+    temperature: 0.1
+    max_tokens: 40960
+    timeout: 60
+
+  minimax:
+    model: MiniMax-M2.5
+    base_url: https://api.minimaxi.com/v1
+    api_key_env: MINIMAX_API_KEY
     temperature: 0.1
     max_tokens: 40960
     timeout: 60
@@ -90,6 +98,14 @@ llm_providers:
   ollama:
     model: qwen2.5:14b-instruct
     base_url: http://127.0.0.1:11434/v1
+    api_key_env: OPENAI_API_KEY
+    temperature: 0.1
+    max_tokens: 4096
+    timeout: 120
+
+  lmstudio:
+    model: local-model
+    base_url: http://127.0.0.1:1234/v1
     api_key_env: OPENAI_API_KEY
     temperature: 0.1
     max_tokens: 4096
@@ -158,6 +174,30 @@ embedding_providers:
     max_batch_size: 32
     timeout: 120
 
+  ollama:
+    model: qwen3-embedding:0.6b
+    base_url: http://127.0.0.1:11434/v1
+    api_key_env: OPENAI_API_KEY
+    dimension: 1024
+    max_batch_size: 32
+    timeout: 120
+
+  lmstudio:
+    model: text-embedding-qwen3-embedding-0.6b
+    base_url: http://127.0.0.1:1234/v1
+    api_key_env: OPENAI_API_KEY
+    dimension: 1024
+    max_batch_size: 32
+    timeout: 120
+
+  vllm:
+    model: Qwen3-Embedding-0.6B
+    base_url: http://127.0.0.1:8008/v1
+    api_key_env: OPENAI_API_KEY
+    dimension: 1024
+    max_batch_size: 32
+    timeout: 120
+
 # ============================================================================
 # 重排序模型提供商配置（可选）
 # ============================================================================
@@ -177,6 +217,27 @@ reranker_providers:
     api_key_env: OPENAI_API_KEY
     top_k: 10
     timeout: 60
+
+  ollama:
+    model: dengcao/Qwen3-Reranker-0.6B:Q8_0
+    base_url: http://127.0.0.1:11434/v1
+    api_key_env: OPENAI_API_KEY
+    top_k: 10
+    timeout: 120
+
+  lmstudio:
+    model: qwen3-reranker-0.6b
+    base_url: http://127.0.0.1:1234/v1
+    api_key_env: OPENAI_API_KEY
+    top_k: 10
+    timeout: 120
+
+  vllm:
+    model: Qwen3-Reranker-0.6B
+    base_url: http://127.0.0.1:8010/v1
+    api_key_env: OPENAI_API_KEY
+    top_k: 10
+    timeout: 120
 
 # ============================================================================
 # 向量数据库配置
@@ -374,7 +435,7 @@ graph_construction:
     # 向量化阶段使用的 embedding provider。
     # - null：默认取 embedding_providers 的第一个 key（yaml 顺序），例如 siliconflow
     # - 指定：例如 openai / huggingface
-    embedding_provider: null
+    embedding_provider: vllm
     clustering:
       # 聚类算法：默认 hdbscan
       method: hdbscan
@@ -388,7 +449,7 @@ graph_construction:
   entity_relation_extraction:
     enabled: true
     # model_provider: 用于实体关系抽取的 LLM provider（默认 siliconflow；可改为 openai/vllm 等）
-    model_provider: siliconflow
+    model_provider: minimax
     confidence_threshold: 0.7
     max_entities_per_chunk: 10
     bench_num: 4
@@ -399,7 +460,7 @@ graph_construction:
   coreference_resolution:
     enabled: true
     # model_provider: 用于指代消解的 LLM provider
-    model_provider: siliconflow
+    model_provider: minimax
     max_distance: 5
     bench_num: 4
     max_retries: 3

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import random
+import re
 from dataclasses import dataclass
 from typing import Any, Callable, List, Optional
 
@@ -174,6 +175,55 @@ class CoreferenceResolver:
         raise RuntimeError(str(last_exc) if last_exc else "LLM call failed")
 
     @staticmethod
+    def _sanitize_llm_output(raw: str) -> str:
+        """清洗模型输出，移除思考标记、Markdown 代码块与首尾噪声。"""
+        text = (raw or "").strip()
+        if not text:
+            return ""
+
+        # 去掉部分推理模型返回的思考内容，避免污染后续 JSON 解析。
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.IGNORECASE | re.DOTALL)
+        text = re.sub(r"```(?:json)?", "", text, flags=re.IGNORECASE)
+        text = text.replace("```", "").strip()
+        return text
+
+    @classmethod
+    def _extract_json_list_text(cls, raw: str) -> str:
+        """从混杂输出中尽量抽取第一个 JSON 列表。"""
+        text = cls._sanitize_llm_output(raw)
+        if not text:
+            return ""
+        if text.startswith("[") and text.endswith("]"):
+            return text
+
+        start = text.find("[")
+        if start < 0:
+            return text
+
+        depth = 0
+        in_string = False
+        escape = False
+        for idx in range(start, len(text)):
+            ch = text[idx]
+            if in_string:
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == '"':
+                    in_string = False
+                continue
+            if ch == '"':
+                in_string = True
+            elif ch == "[":
+                depth += 1
+            elif ch == "]":
+                depth -= 1
+                if depth == 0:
+                    return text[start : idx + 1]
+        return text
+
+    @staticmethod
     def _null_span():
         from contextlib import contextmanager
 
@@ -197,7 +247,7 @@ class CoreferenceResolver:
         - 历史/错误 prompt 可能使用 row，这里允许用 row 作为 fallback
         - 忽略非 dict 项、缺字段项
         """
-        raw = (raw or "").strip()
+        raw = CoreferenceResolver._extract_json_list_text(raw)
         if not raw:
             return []
         data = json.loads(raw)
@@ -255,15 +305,15 @@ class CoreferenceResolver:
         prompt = self._build_prompt(text)
         try:
             raw = await self._call_llm_with_retries(prompt)
-            raw = (raw or "").strip()
-            items = self._parse_json_list(raw)
+            clean_raw = self._extract_json_list_text(raw)
+            items = self._parse_json_list(clean_raw)
             monitor = get_current_monitor()
             if monitor is not None:
                 monitor.observe("coreference_resolution.replacements", float(len(items)))
             resolved_text = self._apply_replacements(text, items)
             return DocumentWithCoreferenceResolution(
                 text=text,
-                coreference_raw=raw,
+                coreference_raw=clean_raw,
                 resolved_text=resolved_text,
                 error=None,
             )

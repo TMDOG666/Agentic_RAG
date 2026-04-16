@@ -1,4 +1,14 @@
-"""Retrieval plan schema, validation, execution, and normalization."""
+"""检索计划模块。
+
+该模块负责：
+
+- 解析对话中的 RAG 上下文
+- 定义检索计划 schema
+- 校验 plan_json
+- 把计划步骤转换成脚本参数
+- 执行多步检索
+- 统一归一化结果并去重
+"""
 
 from __future__ import annotations
 
@@ -7,11 +17,13 @@ import re
 from typing import Any
 
 
+# 从注入到用户问题中的上下文行提取 group_id / doc_id。
 RAG_CONTEXT_RE = re.compile(
     r"^\[RAG_CONTEXT\]\s*(group_id|doc_id)\s*=\s*(.+?)\s*$",
     re.IGNORECASE,
 )
 
+# 当前允许 Agent 在计划中使用的检索模式。
 ALLOWED_MODES = {
     "chunks_vector",
     "chunks_keyword",
@@ -23,6 +35,7 @@ ALLOWED_MODES = {
 
 
 def extract_rag_context(text: str) -> tuple[str, str, str]:
+    """从原始问题文本中提取 RAG 上下文，并返回净化后的 query。"""
     group_id = ""
     doc_id = ""
     kept_lines: list[str] = []
@@ -44,16 +57,19 @@ def extract_rag_context(text: str) -> tuple[str, str, str]:
 
 
 def parse_plan(plan_json: str) -> dict[str, Any]:
+    """把字符串形式的检索计划解析为字典，并做最基础的结构校验。"""
     payload = json.loads((plan_json or "").strip())
     if not isinstance(payload, dict):
-        raise ValueError("plan_json must be a JSON object")
+        raise ValueError("plan_json 必须是 JSON 对象")
+
     steps = payload.get("steps")
     if not isinstance(steps, list) or not steps:
-        raise ValueError("plan_json.steps must be a non-empty array")
+        raise ValueError("plan_json.steps 必须是非空数组")
     return payload
 
 
 def get_plan_schema() -> dict[str, Any]:
+    """返回检索计划模块的 JSON schema，供 Agent 组织 plan_json 时参考。"""
     return {
         "type": "object",
         "required": ["steps"],
@@ -99,6 +115,7 @@ def get_plan_schema() -> dict[str, Any]:
 
 
 def _first_non_empty(item: dict[str, Any], *keys: str) -> Any:
+    """按顺序读取候选字段，返回第一个非空值。"""
     for key in keys:
         value = item.get(key)
         if value not in (None, "", [], {}):
@@ -107,6 +124,7 @@ def _first_non_empty(item: dict[str, Any], *keys: str) -> Any:
 
 
 def _find_candidate_lists(payload: Any) -> list[list[dict[str, Any]]]:
+    """在返回 JSON 中递归搜索最像结果列表的候选列表。"""
     found: list[list[dict[str, Any]]] = []
 
     def walk(node: Any) -> None:
@@ -126,10 +144,12 @@ def _find_candidate_lists(payload: Any) -> list[list[dict[str, Any]]]:
 
 
 def normalize_items(payload: Any, *, mode: str, label: str) -> list[dict[str, Any]]:
+    """把不同检索模式的原始 JSON 归一化成统一证据结构。"""
     candidate_lists = _find_candidate_lists(payload)
     if not candidate_lists:
         return []
 
+    # 通常最长的 dict 列表最接近实际召回结果。
     source = max(candidate_lists, key=len)
     items: list[dict[str, Any]] = []
     for item in source:
@@ -164,6 +184,7 @@ def normalize_items(payload: Any, *, mode: str, label: str) -> list[dict[str, An
 
 
 def dedupe_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """基于核心证据字段做去重，避免多步检索返回重复结果。"""
     seen: set[str] = set()
     deduped: list[dict[str, Any]] = []
 
@@ -189,6 +210,7 @@ def dedupe_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _to_csv(values: Any) -> str:
+    """把字符串或字符串列表统一转成逗号分隔形式。"""
     if isinstance(values, list):
         return ",".join(str(v).strip() for v in values if str(v).strip())
     return str(values or "").strip()
@@ -201,9 +223,10 @@ def _build_script_args(
     default_query: str,
     step: dict[str, Any],
 ) -> str:
+    """根据计划 step 构造对应检索脚本的命令行参数。"""
     mode = str(step.get("mode", "")).strip()
     if mode not in ALLOWED_MODES:
-        raise ValueError(f"unsupported retrieval mode: {mode}")
+        raise ValueError(f"不支持的检索模式: {mode}")
 
     parts = [f"--group-id {group_id}"]
     effective_doc_id = str(step.get("doc_id") or doc_id or "").strip()
@@ -213,7 +236,7 @@ def _build_script_args(
     if mode in {"chunks_vector", "chunks_keyword", "entities", "relations"}:
         query = str(step.get("query") or default_query or "").strip()
         if not query:
-            raise ValueError(f"mode {mode} requires query")
+            raise ValueError(f"模式 {mode} 必须提供 query")
         safe_query = query.replace('"', '\\"')
         parts.append(f'--query "{safe_query}"')
         parts.append(f"--top-k {int(step.get('top_k', 5))}")
@@ -223,14 +246,14 @@ def _build_script_args(
     elif mode == "relations_by_entities":
         entity_names = _to_csv(step.get("entity_names"))
         if not entity_names:
-            raise ValueError("mode relations_by_entities requires entity_names")
+            raise ValueError("模式 relations_by_entities 必须提供 entity_names")
         parts.append(f"--entity-names {entity_names}")
         parts.append(f"--limit {int(step.get('limit', 50))}")
     elif mode == "entities_by_relations":
         relation_ids = _to_csv(step.get("relation_ids"))
         relation_triples = step.get("relation_triples")
         if not relation_ids and not relation_triples:
-            raise ValueError("mode entities_by_relations requires relation_ids or relation_triples")
+            raise ValueError("模式 entities_by_relations 必须提供 relation_ids 或 relation_triples")
         if relation_ids:
             parts.append(f"--relation-ids {relation_ids}")
         if relation_triples:
@@ -242,6 +265,7 @@ def _build_script_args(
 
 
 def _script_name_for_mode(mode: str) -> str:
+    """按约定把检索模式映射为脚本路径。"""
     return f"scripts/{mode}.py"
 
 
@@ -253,13 +277,14 @@ def execute_retrieval_plan(
     group_id: str = "",
     doc_id: str = "",
 ) -> dict[str, Any]:
+    """执行 Agent 制定的多步检索计划，并返回统一证据结果。"""
     inferred_group_id, inferred_doc_id, clean_query = extract_rag_context(query)
     effective_group_id = (group_id or inferred_group_id).strip()
     effective_doc_id = (doc_id or inferred_doc_id).strip()
     effective_query = clean_query or str(query or "").strip()
 
     if not effective_group_id:
-        raise ValueError("missing group_id")
+        raise ValueError("缺少 group_id")
 
     plan = parse_plan(plan_json)
     step_outputs: list[dict[str, Any]] = []
@@ -268,7 +293,7 @@ def execute_retrieval_plan(
 
     for index, step in enumerate(plan["steps"], start=1):
         if not isinstance(step, dict):
-            errors.append({"step": index, "error": "step must be an object"})
+            errors.append({"step": index, "error": "step 必须是对象"})
             continue
 
         try:
@@ -282,7 +307,10 @@ def execute_retrieval_plan(
                 step=step,
             )
             raw = skill_manager.execute_skill_script("rag-retrieval", script_name, script_args)
-            if str(raw).lstrip().startswith("鉂") or str(raw).lstrip().startswith("❌"):
+
+            # 底层脚本执行失败时，保留错误并继续执行后续 step。
+            raw_text = str(raw).lstrip()
+            if raw_text.startswith("❌") or raw_text.startswith("鉂"):
                 errors.append({"step": index, "mode": mode, "error": str(raw)})
                 continue
 

@@ -14,11 +14,28 @@
 """
 
 import os
+from pathlib import Path
 
 from agent.adapter.graph import build_graph, create_system_prompt
 from agent.llm.config import create_model, load_agent_config
 from agent.skill.manager import SkillManager
 from agent.tools.skill_tools import create_tools
+
+
+def _resolve_agent_config_path() -> str:
+    """解析 Agent 配置路径，优先使用环境变量，其次使用项目内标准配置位置。"""
+    env_path = os.environ.get("AGENT_CONFIG")
+    if env_path:
+        return env_path
+
+    candidates = [
+        Path("config") / "agent_config.yaml",
+        Path("agent_config.yaml"),
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    return str(candidates[0])
 
 
 def create_runtime():
@@ -47,7 +64,7 @@ def create_runtime():
     tools = create_tools(skill_manager)
 
     # LLM 接口层：读取配置并实例化模型。
-    config_path = os.environ.get("AGENT_CONFIG", "agent_config.yaml")
+    config_path = _resolve_agent_config_path()
     agent_config = load_agent_config(config_path)
     model = create_model(agent_config)
 

@@ -369,7 +369,7 @@ class SkillManager:
                 return f"❌ 不支持的脚本类型: {script_name}"
 
             if args:
-                # args 由模型传入，约定为空格分隔；直接 split() 拼到命令行参数。
+                # 使用 shell 风格拆参，保证带引号的 query 不会被错误切断。
                 cmd.extend(shlex.split(args))
 
             # 子进程环境：强制 python IO 使用 utf-8，减少 Windows 控制台编码差异。

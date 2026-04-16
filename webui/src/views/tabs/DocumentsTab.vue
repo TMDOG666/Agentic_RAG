@@ -1,24 +1,25 @@
 <template>
-  <div class="docs-workbench">
-    <section class="hero">
+  <div class="docs-workbench page-grid">
+    <section class="hero view-card">
       <div class="hero__copy">
-        <div class="hero__eyebrow">Ingest Control Room</div>
-        <h2 class="hero__title">文档录入改成任务流，提交后立即返回，构建过程在右侧持续追踪。</h2>
+        <div class="eyebrow">Ingest Control Room</div>
+        <h2 class="hero__title">文档录入、任务追踪和后端日志放在同一个工作台里。</h2>
         <p class="hero__desc">
-          当前分组的文档、异步入库任务和后端日志被放到同一视图里。你不需要等待整条链路完成，界面会持续轮询任务状态和日志。
+          提交文本或文件后，界面会持续刷新任务状态与日志。日志区域会优先按文档过滤；如果带上 `task_id`
+          没命中，也会自动回退一次，避免看起来像“没有日志”。
         </p>
       </div>
       <div class="hero__stats">
         <div class="hero-stat">
-          <span class="hero-stat__label">文档</span>
+          <span class="hero-stat__label">文档数</span>
           <strong class="hero-stat__value">{{ docs.length }}</strong>
         </div>
         <div class="hero-stat">
-          <span class="hero-stat__label">运行中任务</span>
+          <span class="hero-stat__label">运行中</span>
           <strong class="hero-stat__value">{{ runningTasks }}</strong>
         </div>
         <div class="hero-stat">
-          <span class="hero-stat__label">失败任务</span>
+          <span class="hero-stat__label">失败数</span>
           <strong class="hero-stat__value">{{ failedTasks }}</strong>
         </div>
       </div>
@@ -30,7 +31,7 @@
           <div class="panel__header">
             <div>
               <div class="panel__title">文档资产</div>
-              <div class="panel__sub">基础文档保存是即时的，图构建在后台异步完成。</div>
+              <div class="panel__sub">基础文档会立刻保存，图谱与融合在后端异步完成。</div>
             </div>
             <div class="panel__actions">
               <el-button @click="openUpload" type="success">上传文件</el-button>
@@ -40,12 +41,12 @@
           </div>
         </template>
 
-        <el-table :data="docs" v-loading="docsLoading" style="width: 100%" row-key="doc_id" empty-text="当前分组还没有文档">
+        <el-table :data="docs" v-loading="docsLoading" row-key="doc_id" class="shell-table" empty-text="当前分组还没有文档">
           <el-table-column prop="doc_name" label="文档" min-width="260">
             <template #default="scope">
               <div class="doc-cell">
                 <div class="doc-cell__name">{{ scope.row.doc_name || scope.row.doc_id }}</div>
-                <div class="doc-cell__meta">doc_id: {{ scope.row.doc_id }}</div>
+                <div class="doc-cell__meta mono">doc_id: {{ scope.row.doc_id }}</div>
               </div>
             </template>
           </el-table-column>
@@ -53,7 +54,7 @@
           <el-table-column label="最近任务" width="230">
             <template #default="scope">
               <div v-if="taskMap[scope.row.doc_id]" class="task-pill">
-                <span class="task-pill__dot" :class="`is-${taskTone(taskMap[scope.row.doc_id].status)}`" />
+                <span class="status-dot" :class="`is-${taskTone(taskMap[scope.row.doc_id].status)}`" />
                 <div>
                   <div>{{ taskLabel(taskMap[scope.row.doc_id]) }}</div>
                   <div class="task-pill__sub">{{ taskMap[scope.row.doc_id].updated_at }}</div>
@@ -79,7 +80,7 @@
           <div class="panel__header panel__header--stack">
             <div>
               <div class="panel__title">入库任务队列</div>
-              <div class="panel__sub">自动轮询中，状态会持续推进到 `done` 或失败。</div>
+              <div class="panel__sub">自动轮询中，状态会推进到 `completed` 或 `failed`。</div>
             </div>
             <div class="panel__actions">
               <el-switch v-model="autoRefresh" active-text="自动刷新" inactive-text="手动" />
@@ -115,7 +116,7 @@
             <div>
               <div class="panel__title">后端日志</div>
               <div class="panel__sub">
-                支持按 `group_id / doc_id / task_id / contains` 过滤，直接观察后端调用过程。
+                支持按 `group_id / doc_id / task_id / contains` 过滤。部分日志行没有 `task_id`，因此前端会自动做一次回退查询。
               </div>
             </div>
             <div class="panel__actions">
@@ -125,10 +126,10 @@
         </template>
 
         <div class="log-toolbar">
-          <el-input v-model="logQuery.doc_id" placeholder="doc_id" clearable />
-          <el-input v-model="logQuery.task_id" placeholder="task_id" clearable />
-          <el-input v-model="logQuery.contains" placeholder="关键词过滤" clearable />
-          <el-select v-model="logQuery.lines" style="width: 120px">
+          <el-input v-model="logQuery.doc_id" placeholder="doc_id" clearable class="glass-input" />
+          <el-input v-model="logQuery.task_id" placeholder="task_id" clearable class="glass-input" />
+          <el-input v-model="logQuery.contains" placeholder="关键字过滤" clearable class="glass-input" />
+          <el-select v-model="logQuery.lines" class="glass-select" style="width: 120px">
             <el-option :value="100" label="100 行" />
             <el-option :value="200" label="200 行" />
             <el-option :value="400" label="400 行" />
@@ -138,28 +139,29 @@
         <div class="log-meta">
           <span>日志文件: {{ logState.file_path || '未知' }}</span>
           <span v-if="selectedTaskId">当前任务: {{ selectedTaskId }}</span>
+          <span v-if="logState.fallback_used">已自动忽略 task_id 过滤</span>
         </div>
 
         <div class="log-console" v-loading="logsLoading">
-          <div v-if="!logState.lines.length" class="log-console__empty">没有匹配到日志。</div>
+          <div v-if="!logState.lines.length" class="log-console__empty">{{ logEmptyText }}</div>
           <pre v-else>{{ logState.lines.join('\n') }}</pre>
         </div>
       </el-card>
     </section>
 
-    <el-dialog v-model="dlg" title="录入文本" width="760px">
+    <el-dialog v-model="dlg" title="录入文本" width="760px" append-to-body align-center>
       <el-form label-width="90px">
         <el-form-item label="doc_id">
-          <el-input v-model="form.doc_id" placeholder="可选：留空则新建；填写则按同一 doc_id 重建" />
+          <el-input v-model="form.doc_id" placeholder="可选：留空新建；填写则按同一 doc_id 重建" class="glass-input" />
         </el-form-item>
         <el-form-item label="doc_name">
-          <el-input v-model="form.doc_name" placeholder="例如 report.txt" />
+          <el-input v-model="form.doc_name" placeholder="例如：report.txt" class="glass-input" />
         </el-form-item>
         <el-form-item label="doc_time">
-          <el-input v-model="form.doc_time" placeholder="ISO8601，例如 2026-03-05T07:12:34Z" />
+          <el-input v-model="form.doc_time" placeholder="ISO8601，例如 2026-03-05T07:12:34Z" class="glass-input" />
         </el-form-item>
         <el-form-item label="text">
-          <el-input v-model="form.text" type="textarea" :rows="10" placeholder="输入要入库的正文" />
+          <el-input v-model="form.text" type="textarea" :rows="10" placeholder="输入要入库的正文" class="glass-input" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -168,18 +170,13 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="uploadDlg" title="上传文件并入库" width="760px">
+    <el-dialog v-model="uploadDlg" title="上传文件并入库" width="760px" append-to-body align-center>
       <el-form label-width="90px">
-        <el-form-item label="文档ID">
-          <el-input v-model="uploadForm.doc_id" placeholder="可选：留空则新建；填写则按同一文档重建" />
+        <el-form-item label="文档 ID">
+          <el-input v-model="uploadForm.doc_id" placeholder="可选：留空新建；填写则按同一文档重建" class="glass-input" />
         </el-form-item>
         <el-form-item label="文档时间">
-          <el-date-picker
-            v-model="uploadForm.doc_time"
-            type="datetime"
-            placeholder="请选择时间"
-            style="width: 100%"
-          />
+          <el-date-picker v-model="uploadForm.doc_time" type="datetime" placeholder="请选择时间" style="width: 100%" />
         </el-form-item>
         <el-form-item label="标准化">
           <el-switch v-model="uploadForm.standardize" />
@@ -196,7 +193,7 @@
           >
             <div class="upload-dropzone">
               <div class="upload-dropzone__title">拖拽文件到这里</div>
-              <div class="upload-dropzone__sub">支持已有配置允许的文本、Office、表格和图片格式</div>
+              <div class="upload-dropzone__sub">支持当前后端配置允许的文档、Office、表格和图片格式</div>
             </div>
           </el-upload>
         </el-form-item>
@@ -259,6 +256,7 @@ const logQuery = reactive({
 const logState = reactive({
   file_path: '',
   lines: [],
+  fallback_used: false,
 })
 
 const taskMap = computed(() => {
@@ -271,6 +269,11 @@ const taskMap = computed(() => {
 
 const runningTasks = computed(() => tasks.value.filter((x) => ['pending', 'running'].includes(x.status)).length)
 const failedTasks = computed(() => tasks.value.filter((x) => x.status === 'failed').length)
+const logEmptyText = computed(() => {
+  if (logQuery.task_id && !logState.fallback_used) return '当前 task_id 下没有匹配日志。'
+  if (logQuery.doc_id) return '当前 doc_id 下没有匹配日志。'
+  return '没有匹配到日志。'
+})
 
 function taskTone(status) {
   if (status === 'completed') return 'success'
@@ -297,10 +300,7 @@ async function loadTasks() {
   tasksLoading.value = true
   try {
     const res = await api.get('/ingest-tasks', {
-      params: {
-        group_id: props.groupId,
-        limit: 100,
-      },
+      params: { group_id: props.groupId, limit: 100 },
     })
     tasks.value = Array.isArray(res.data) ? res.data : []
     if (!selectedTaskId.value && tasks.value.length) {
@@ -311,19 +311,37 @@ async function loadTasks() {
   }
 }
 
+async function tailLogs(params) {
+  const res = await api.get('/logs/tail', { params })
+  return {
+    file_path: String(res.data?.file_path || ''),
+    lines: Array.isArray(res.data?.lines) ? res.data.lines : [],
+  }
+}
+
 async function loadLogs() {
   logsLoading.value = true
   try {
-    const params = {
+    const baseParams = {
       group_id: props.groupId,
       doc_id: (logQuery.doc_id || '').trim() || undefined,
       task_id: (logQuery.task_id || '').trim() || undefined,
       contains: (logQuery.contains || '').trim() || undefined,
       lines: logQuery.lines,
     }
-    const res = await api.get('/logs/tail', { params })
-    logState.file_path = String(res.data?.file_path || '')
-    logState.lines = Array.isArray(res.data?.lines) ? res.data.lines : []
+    const primary = await tailLogs(baseParams)
+    logState.file_path = primary.file_path
+    logState.lines = primary.lines
+    logState.fallback_used = false
+
+    if (!primary.lines.length && baseParams.task_id) {
+      const fallback = await tailLogs({ ...baseParams, task_id: undefined })
+      if (fallback.lines.length) {
+        logState.file_path = fallback.file_path
+        logState.lines = fallback.lines
+        logState.fallback_used = true
+      }
+    }
   } finally {
     logsLoading.value = false
   }
@@ -378,9 +396,7 @@ function selectTask(task, options = {}) {
   selectedTaskId.value = task.task_id
   logQuery.task_id = task.task_id
   logQuery.doc_id = task.doc_id
-  if (!options.silent) {
-    loadLogs()
-  }
+  if (!options.silent) loadLogs()
 }
 
 function focusDocLogs(docId) {
@@ -531,13 +547,6 @@ onBeforeUnmount(() => {
   color: #f4f7fb;
 }
 
-.hero__eyebrow {
-  font-size: 12px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  opacity: 0.82;
-}
-
 .hero__title {
   margin: 0;
   font-size: 28px;
@@ -652,18 +661,6 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 8px;
   min-width: 0;
-}
-
-.task-pill__dot,
-.task-card__status {
-  flex-shrink: 0;
-}
-
-.task-pill__dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 999px;
-  background: #7f92a0;
 }
 
 .task-pill__sub,

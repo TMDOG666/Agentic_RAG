@@ -1,5 +1,6 @@
 import asyncio
 import random
+import re
 from dataclasses import dataclass
 from typing import Any, Callable, List, Optional
 
@@ -221,6 +222,36 @@ class EntityRelationExtractor:
         raise RuntimeError(str(last_exc) if last_exc else "LLM call failed")
 
     @staticmethod
+    def _sanitize_llm_output(raw: str) -> str:
+        """清洗抽取模型输出，尽量保留 entity/relation 主体内容。"""
+        text = (raw or "").replace("\r\n", "\n").strip()
+        if not text:
+            return ""
+
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.IGNORECASE | re.DOTALL)
+        text = re.sub(r"```(?:text|json|markdown)?", "", text, flags=re.IGNORECASE)
+        text = text.replace("```", "")
+
+        cleaned_lines: List[str] = []
+        started = False
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.startswith(("entity<|SEP|>", "relation<|SEP|>", "<|DONE|>")):
+                started = True
+                cleaned_lines.append(stripped)
+                if stripped == "<|DONE|>":
+                    break
+                continue
+            if started:
+                cleaned_lines.append(stripped)
+
+        if cleaned_lines:
+            return "\n".join(cleaned_lines).strip()
+        return text.strip()
+
+    @staticmethod
     def _null_span():
         from contextlib import contextmanager
 
@@ -247,7 +278,7 @@ class EntityRelationExtractor:
             prompt = self._build_prompt(chunk.text)
             try:
                 raw = await self._call_llm_with_retries(prompt)
-                raw = (raw or "").strip()
+                raw = self._sanitize_llm_output(raw)
                 monitor = get_current_monitor()
                 if monitor is not None:
                     monitor.inc("entity_relation_extraction.chunk_success", 1)

@@ -1,4 +1,7 @@
-"""Tool wrappers for SkillManager."""
+"""SkillManager 的 tool 暴露层。
+
+这里不承载复杂业务逻辑，只负责把底层能力包装成 Agent 可调用的工具。
+"""
 
 from __future__ import annotations
 
@@ -10,17 +13,17 @@ from agent.tools.retrieval_plan import execute_retrieval_plan, get_plan_schema
 
 
 def create_tools(skill_manager):
-    """Create LangChain tools backed by SkillManager."""
+    """基于 SkillManager 创建一组可供 Agent 调用的 tools。"""
 
     @tool
     def load_skill(skill_name: str) -> str:
-        """Load the full instruction body of a skill."""
+        """加载某个 skill 的正文说明。"""
         print(f"[tool] load_skill: {skill_name}")
         return skill_manager.load_skill(skill_name)
 
     @tool
     def read_skill_file(skill_name: str, filename: str) -> str:
-        """Read a reference or asset file inside a skill directory."""
+        """读取某个 skill 目录下的引用文件。"""
         print(f"[tool] read_skill_file: {skill_name}/{filename}")
         return skill_manager.read_skill_file(skill_name, filename)
 
@@ -32,7 +35,8 @@ def create_tools(skill_manager):
         script_args: str = "",
         **kwargs,
     ) -> str:
-        """Execute a concrete script inside a skill directory."""
+        """执行某个 skill 下的脚本。"""
+        # 兼容历史参数名，避免不同提示词版本传参不一致。
         v_args = kwargs.get("v__args", "")
         effective_args = args or script_args or v_args
         print(f"[tool] execute_skill_script: {skill_name}/{script_name} {effective_args}")
@@ -40,7 +44,7 @@ def create_tools(skill_manager):
 
     @tool
     def get_retrieval_plan_schema() -> str:
-        """Return the JSON schema for the retrieval-plan module."""
+        """返回检索计划模块的 JSON schema。"""
         return json.dumps(get_plan_schema(), ensure_ascii=False)
 
     @tool
@@ -50,7 +54,7 @@ def create_tools(skill_manager):
         group_id: str = "",
         doc_id: str = "",
     ) -> str:
-        """Execute a retrieval plan module and return normalized evidence."""
+        """执行检索计划，并返回统一的证据结果。"""
         try:
             result = execute_retrieval_plan(
                 skill_manager=skill_manager,

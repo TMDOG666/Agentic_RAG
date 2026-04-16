@@ -1,7 +1,7 @@
-"""tools
+"""Agent 的工具层包。
 
-Tool 层（Tool Layer）包。
+当前主要包含两类内容：
 
-该层负责将底层能力（例如 SkillManager）封装为可被大模型 function calling 调用的工具。
-核心入口：`tools.skill_tools.create_tools`。
+- `skill_tools.py`：把 SkillManager 暴露成 Agent 可调用的工具
+- `retrieval_plan.py`：检索计划模块，负责 schema、解析、执行和结果归一化
 """
