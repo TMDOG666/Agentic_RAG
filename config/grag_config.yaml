@@ -411,8 +411,8 @@ graph_construction:
     # max_token_threshold/min_token_threshold: 目标 chunk token 区间（依赖 token 估算器，可能与实际模型略偏差）
     # enable_fallback: 语义/标题分块失败时是否启用 fallback
     strategy: semantic_recursive_greedy
-    max_token_threshold: 1500
-    min_token_threshold: 1000
+    max_token_threshold: 800
+    min_token_threshold: 300
     preserve_headings: true
     enable_fallback: true
     # fallback_split_order: fallback 分块顺序
@@ -422,7 +422,7 @@ graph_construction:
     # - "fixed_step": 固定步长
     fallback_split_order: ["\n\n", "\n", "sentence", "fixed_step"]
     # fallback_fixed_step_chars: 固定步长的字符数
-    fallback_fixed_step_chars: 1200
+    fallback_fixed_step_chars: 700
     chunk_size: 512
     overlap: 0
     separator: "\n\n"

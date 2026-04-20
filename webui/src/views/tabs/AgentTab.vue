@@ -125,6 +125,18 @@
           <span>事件数</span>
           <strong>{{ currentRun.events.length }}</strong>
         </div>
+        <div class="observe-metric usage-metric">
+          <span>Input Tokens</span>
+          <strong>{{ formatTokenNumber(currentRun.usage.inputTokens) }}</strong>
+        </div>
+        <div class="observe-metric usage-metric">
+          <span>Output Tokens</span>
+          <strong>{{ formatTokenNumber(currentRun.usage.outputTokens) }}</strong>
+        </div>
+        <div class="observe-metric usage-metric">
+          <span>Total Tokens</span>
+          <strong>{{ formatTokenNumber(currentRun.usage.totalTokens) }}</strong>
+        </div>
       </div>
 
       <el-tabs v-model="activeObserveTab" class="observe-tabs">
@@ -138,6 +150,12 @@
                   <div class="task-item__meta">{{ task.kind }} · {{ task.subtitle || '处理中' }}</div>
                 </div>
                 <el-tag :type="taskStatusType(task.status)" effect="light" round>{{ taskStatusLabel(task.status) }}</el-tag>
+              </div>
+              <div class="task-usage">
+                <span class="task-usage__item">In {{ formatTokenNumber(task.usage?.inputTokens) }}</span>
+                <span class="task-usage__item">Out {{ formatTokenNumber(task.usage?.outputTokens) }}</span>
+                <span class="task-usage__item">Total {{ formatTokenNumber(task.usage?.totalTokens) }}</span>
+                <span v-if="task.usage?.isEstimated" class="task-usage__hint">估算</span>
               </div>
               <div v-if="task.detail" class="task-item__detail">{{ task.detail }}</div>
             </div>
@@ -212,17 +230,65 @@ const scopeLabel = computed(() => (docId.value ? `分组 ${props.groupId} / 文�
 const activeMessages = computed(() => activeSession.value?.messages || [])
 const currentRun = computed(() => {
   const runs = Array.isArray(activeSession.value?.runs) ? activeSession.value.runs : []
-  return runs[0] || createRunState()
+  const run = runs[0]
+  if (!run) return createRunState()
+  return {
+    ...createRunState(),
+    ...run,
+    usage: createUsage(run.usage || {}),
+    tasks: Array.isArray(run.tasks)
+      ? run.tasks.map((task) => ({ ...task, usage: createUsage(task?.usage || {}) }))
+      : [],
+  }
 })
 const runStatusLabel = computed(() => runStatusText(currentRun.value.status))
 const runStatusType = computed(() => taskStatusType(currentRun.value.status))
 
 function createRunState() {
-  return { id: '', status: 'idle', startedAt: '', finishedAt: '', tasks: [], events: [], evidence: [] }
+  return {
+    id: '',
+    status: 'idle',
+    startedAt: '',
+    finishedAt: '',
+    tasks: [],
+    events: [],
+    evidence: [],
+    usage: createUsage(),
+  }
 }
 
 function createRun(taskId = `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`) {
-  return { id: taskId, status: 'running', startedAt: new Date().toISOString(), finishedAt: '', tasks: [], events: [], evidence: [] }
+  return {
+    id: taskId,
+    status: 'running',
+    startedAt: new Date().toISOString(),
+    finishedAt: '',
+    tasks: [],
+    events: [],
+    evidence: [],
+    usage: createUsage(),
+  }
+}
+
+function createUsage(patch = {}) {
+  return {
+    inputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    isEstimated: false,
+    latencyMs: 0,
+    ...patch,
+  }
+}
+
+function normalizeUsage(payload = {}) {
+  return createUsage({
+    inputTokens: Number(payload.input_tokens ?? payload.inputTokens ?? 0) || 0,
+    outputTokens: Number(payload.output_tokens ?? payload.outputTokens ?? 0) || 0,
+    totalTokens: Number(payload.total_tokens ?? payload.totalTokens ?? 0) || 0,
+    isEstimated: Boolean(payload.is_estimated ?? payload.isEstimated),
+    latencyMs: Number(payload.latency_ms ?? payload.latencyMs ?? 0) || 0,
+  })
 }
 
 function cloneRun(run) {
@@ -337,7 +403,22 @@ function setRunStatus(status) {
 }
 
 function createTask(id, title, kind, subtitle = '', detail = '') {
-  return { id, title, kind, subtitle, detail, status: 'running' }
+  return { id, title, kind, subtitle, detail, status: 'running', usage: createUsage() }
+}
+
+function recomputeRunUsage(tasks = []) {
+  return tasks.reduce(
+    (acc, task) => {
+      const usage = normalizeUsage(task?.usage || {})
+      acc.inputTokens += usage.inputTokens
+      acc.outputTokens += usage.outputTokens
+      acc.totalTokens += usage.totalTokens
+      acc.latencyMs += usage.latencyMs
+      acc.isEstimated = acc.isEstimated || usage.isEstimated
+      return acc
+    },
+    createUsage(),
+  )
 }
 
 function upsertRunTask(taskPatch) {
@@ -346,9 +427,16 @@ function upsertRunTask(taskPatch) {
   const run = cloneRun(runs[0])
   const tasks = Array.isArray(run.tasks) ? [...run.tasks] : []
   const index = tasks.findIndex((item) => item.id === taskPatch.id)
-  if (index >= 0) tasks[index] = { ...tasks[index], ...taskPatch }
-  else tasks.unshift(taskPatch)
+  if (index >= 0) {
+    tasks[index] = {
+      ...tasks[index],
+      ...taskPatch,
+      usage: normalizeUsage(taskPatch.usage ?? tasks[index].usage ?? {}),
+    }
+  }
+  else tasks.unshift({ ...taskPatch, usage: normalizeUsage(taskPatch.usage || {}) })
   run.tasks = tasks
+  run.usage = recomputeRunUsage(tasks)
   runs[0] = run
   updateActiveSession({ runs })
   persistActiveSession()
@@ -419,6 +507,11 @@ function messageRoleLabel(role) {
   return 'User'
 }
 
+function formatTokenNumber(value) {
+  const num = Number(value || 0) || 0
+  return num.toLocaleString('zh-CN')
+}
+
 function summarizeEvidence(item) {
   return item?.raw ? JSON.stringify(item.raw).slice(0, 180) : '暂无摘要'
 }
@@ -435,6 +528,15 @@ function handleAgentEvent(eventName, payload) {
       appendRunEvent({ title: '已开始执行', description: 'Agent 已接收问题并开始规划。', tone: 'info' })
       break
     case 'agent.think.start':
+      upsertRunTask(
+        createTask(
+          event.task_id || `agent-think:${Date.now()}`,
+          'Agent 推理',
+          'agent',
+          event.model_name || 'LLM',
+          `messages=${event.message_count || 0}`,
+        ),
+      )
       appendRunEvent({ title: '模型开始推理', description: `输入消息数：${event.message_count || 0}`, tone: 'warning' })
       break
     case 'agent.tool_calls':
@@ -553,6 +655,22 @@ function handleAgentEvent(eventName, payload) {
         status: 'error',
       })
       appendRunEvent({ title: `检索步骤 ${event.step} 失败`, description: event.error || '', tone: 'danger' })
+      break
+    case 'usage.llm':
+      upsertRunTask({
+        id: event.task_id || `agent-think:${Date.now()}`,
+        title: 'Agent 推理',
+        kind: 'agent',
+        subtitle: event.model_name || event.provider || 'LLM',
+        detail: `${event.provider || ''}${event.latency_ms ? ` · ${event.latency_ms}ms` : ''}`,
+        status: 'done',
+        usage: normalizeUsage(event),
+      })
+      appendRunEvent({
+        title: 'Token 使用统计',
+        description: `in=${formatTokenNumber(event.input_tokens)} out=${formatTokenNumber(event.output_tokens)} total=${formatTokenNumber(event.total_tokens)}`,
+        tone: 'info',
+      })
       break
     case 'assistant.start':
       appendMessage('assistant', '', { streaming: true })
@@ -995,7 +1113,7 @@ onMounted(async () => {
 
 .observe-summary {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   margin-bottom: 14px;
 }
@@ -1017,6 +1135,10 @@ onMounted(async () => {
   margin-top: 8px;
   font-size: 24px;
   color: var(--brand-strong);
+}
+
+.usage-metric {
+  background: linear-gradient(180deg, rgba(16, 62, 82, 0.12), rgba(16, 62, 82, 0.05));
 }
 
 .observe-tabs :deep(.el-tabs__content) {
@@ -1074,6 +1196,28 @@ onMounted(async () => {
   color: var(--text-sub);
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.task-usage {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.task-usage__item,
+.task-usage__hint {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1.4;
+  background: rgba(17, 40, 55, 0.06);
+  color: var(--text-sub);
+}
+
+.task-usage__hint {
+  background: rgba(194, 134, 41, 0.14);
+  color: #8b5b11;
 }
 
 .event-item {

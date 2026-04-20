@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import os
+import time
+import uuid
 
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 
 from agent.telemetry import emit_event
+from agent.token_usage import estimate_message_tokens, estimate_text_tokens, extract_usage_metadata
 
 
 def create_system_prompt(skill_manager) -> str:
@@ -41,15 +44,24 @@ def build_graph(*, model, tools, system_prompt: str):
 
     def agent_node(state: MessagesState):
         bound_model = model.bind_tools(tools)
-        emit_event("agent.think.start", {"message_count": len(state["messages"])})
+        invocation_id = f"agent-think:{uuid.uuid4().hex[:10]}"
+        request_messages = [
+            {"role": "system", "content": system_prompt},
+            *state["messages"],
+        ]
+        started_at = time.perf_counter()
+        emit_event(
+            "agent.think.start",
+            {
+                "task_id": invocation_id,
+                "message_count": len(state["messages"]),
+                "model_name": getattr(model, "model_name", None) or getattr(model, "model", None),
+                "provider": getattr(model, "openai_api_base", None) or getattr(model, "base_url", None),
+            },
+        )
 
         try:
-            response = bound_model.invoke(
-                [
-                    {"role": "system", "content": system_prompt},
-                    *state["messages"],
-                ]
-            )
+            response = bound_model.invoke(request_messages)
 
             if os.environ.get("DEBUG"):
                 print(f"\n[debug] response type: {type(response)}")
@@ -71,9 +83,29 @@ def build_graph(*, model, tools, system_prompt: str):
                 ]
                 emit_event("agent.tool_calls", {"tool_calls": tool_calls})
 
+            usage = extract_usage_metadata(response)
+            input_tokens = usage["input_tokens"] or estimate_message_tokens(request_messages)
+            output_tokens = usage["output_tokens"] or estimate_text_tokens(str(getattr(response, "content", "") or ""))
+            total_tokens = usage["total_tokens"] or (input_tokens + output_tokens)
+            emit_event(
+                "usage.llm",
+                {
+                    "task_id": invocation_id,
+                    "provider": getattr(model, "openai_api_base", None) or getattr(model, "base_url", None),
+                    "model_name": getattr(model, "model_name", None) or getattr(model, "model", None),
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "total_tokens": total_tokens,
+                    "is_estimated": usage["source"] == "estimated",
+                    "usage_source": usage["source"],
+                    "latency_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                },
+            )
+
             emit_event(
                 "agent.think.end",
                 {
+                    "task_id": invocation_id,
                     "content_preview": str(getattr(response, "content", "") or "")[:240],
                     "tool_call_count": len(tool_calls),
                 },
