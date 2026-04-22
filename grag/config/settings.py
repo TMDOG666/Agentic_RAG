@@ -411,6 +411,28 @@ class GraphRAGSettings(BaseModel):
         value = str(getattr(config, "graph_index_collection_name", "") or "").strip()
         return value or "grag_graph_index"
 
+    def resolve_graph_construction_llm_providers(self) -> Dict[str, str]:
+        """返回知识录入各阶段最终实际生效的 LLM provider。"""
+        graph_cfg = self.graph_construction
+        global_provider = str(self.llm_provider or "").strip()
+
+        def _read(section_name: str, field_name: str) -> Optional[str]:
+            section = getattr(graph_cfg, section_name, {}) or {}
+            if isinstance(section, dict):
+                raw = section.get(field_name)
+            else:
+                raw = getattr(section, field_name, None)
+            value = str(raw or "").strip()
+            return value or None
+
+        return {
+            "global_default": global_provider,
+            "coreference_resolution": _read("coreference_resolution", "model_provider") or global_provider,
+            "entity_relation_extraction": _read("entity_relation_extraction", "model_provider") or global_provider,
+            "fusion": _read("entity_resolution_knowledge_fusion", "fusion_llm_provider") or global_provider,
+            "entity_alignment": global_provider,
+        }
+
     def get_env_var(self, env_var_name: str, default: Optional[str] = None) -> Optional[str]:
         """获取环境变量值
 

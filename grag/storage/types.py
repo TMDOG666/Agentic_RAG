@@ -32,6 +32,42 @@ class ChunkEmbeddingRecord:
 
 
 @dataclass(frozen=True)
+class GraphChunkCheckpointRecord:
+    group_id: str
+    doc_id: str
+    chunk_id: str
+    chunk_index: int
+    status: str
+    resolved_text: str
+    entity_relation_raw: str
+    parsed_json: Dict[str, Any]
+    error: str = ""
+    updated_at: str = ""
+
+
+@dataclass(frozen=True)
+class GraphChunkDetailRecord:
+    chunk: ChunkRecord
+    status: str
+    error: str
+    updated_at: str
+    resolved_text: str
+    entity_relation_raw: str
+    parsed_json: Dict[str, Any]
+
+
+@dataclass(frozen=True)
+class GraphPipelineCheckpointRecord:
+    group_id: str
+    doc_id: str
+    stage: str
+    status: str
+    payload_json: Dict[str, Any]
+    error: str = ""
+    updated_at: str = ""
+
+
+@dataclass(frozen=True)
 class GraphEntityRecord:
     # entity_id 为“doc 级实体”的稳定 id（uuid5），用于：
     # - 作为 Milvus graph_index 的 source_id

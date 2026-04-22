@@ -31,3 +31,19 @@ class IngestTaskOut(BaseModel):
             created_at=str(task.created_at),
             updated_at=str(task.updated_at),
         )
+
+
+class IngestTaskDeleteOut(BaseModel):
+    ok: bool
+    task_id: str
+
+
+class IngestTaskClearIn(BaseModel):
+    group_id: str | None = None
+    doc_id: str | None = None
+    statuses: list[str] | None = None
+
+
+class IngestTaskClearOut(BaseModel):
+    ok: bool
+    deleted: int

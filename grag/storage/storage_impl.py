@@ -14,6 +14,8 @@ from .repositories import (
 )
 from .types import (
     ChunkEmbeddingRecord,
+    GraphChunkCheckpointRecord,
+    GraphPipelineCheckpointRecord,
     ChunkRecord,
     DocumentRecord,
     EntityMentionRecord,
@@ -70,6 +72,37 @@ class DataClientGraphStorage(GraphStorage):
             relations=[],
         )
         self._milvus_repo.upsert_chunk_embeddings(document=document, embeddings=embeddings)
+
+    def list_doc_chunks(
+        self,
+        *,
+        group_id: str,
+        doc_id: str,
+        limit: int = 200000,
+    ) -> Sequence[ChunkRecord]:
+        return self._pg_repo.list_doc_chunks(group_id=group_id, doc_id=doc_id, limit=limit)
+
+    def upsert_graph_chunk_checkpoint(self, *, checkpoint: GraphChunkCheckpointRecord) -> None:
+        self._pg_repo.upsert_graph_chunk_checkpoint(checkpoint=checkpoint)
+
+    def list_graph_chunk_checkpoints(
+        self,
+        *,
+        group_id: str,
+        doc_id: str,
+    ) -> Sequence[GraphChunkCheckpointRecord]:
+        return self._pg_repo.list_graph_chunk_checkpoints(group_id=group_id, doc_id=doc_id)
+
+    def upsert_graph_pipeline_checkpoint(self, *, checkpoint: GraphPipelineCheckpointRecord) -> None:
+        self._pg_repo.upsert_graph_pipeline_checkpoint(checkpoint=checkpoint)
+
+    def list_graph_pipeline_checkpoints(
+        self,
+        *,
+        group_id: str,
+        doc_id: str,
+    ) -> Sequence[GraphPipelineCheckpointRecord]:
+        return self._pg_repo.list_graph_pipeline_checkpoints(group_id=group_id, doc_id=doc_id)
 
     def save_graph_assets(
         self,

@@ -162,7 +162,8 @@ class EntityRelationExtractor:
             return getattr(cfg, key, default)
 
         self.enabled: bool = bool(_get_value("enabled", True))
-        self.model_provider: str = str(_get_value("model_provider", settings.llm_provider))
+        raw_model_provider = _get_value("model_provider", settings.llm_provider)
+        self.model_provider: str = str(raw_model_provider or settings.llm_provider).strip()
         self.confidence_threshold: float = float(_get_value("confidence_threshold", 0.7))
         self.max_entities_per_chunk: int = int(_get_value("max_entities_per_chunk", 10))
         self.bench_num: int = int(_get_value("bench_num", 4))

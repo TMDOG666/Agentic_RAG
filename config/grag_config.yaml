@@ -15,7 +15,7 @@
 # ============================================================================
 
 # 默认使用的 LLM 提供商（必须存在于 llm_providers 下）
-llm_provider: minimax
+llm_provider: siliconflow
 
 # 默认使用的向量嵌入模型提供商（必须存在于 embedding_providers 下）
 embedding_provider: vllm
@@ -24,7 +24,7 @@ embedding_provider: vllm
 reranker_provider: vllm
 
 # 默认使用的视觉模型提供商（用于 OCR / 图像理解；必须存在于 vision_providers 下）
-vision_provider: siliconflow
+vision_provider: minimax
 
 # 默认使用的向量数据库（必须存在于 vector_databases 下）
 vector_db_provider: milvus
@@ -47,7 +47,7 @@ llm_providers:
   # - max_tokens: 单次输出上限（不同 provider 可能含义略有差异）
   # - timeout: 请求超时（秒）
   siliconflow:
-    model: Qwen/Qwen3.5-27B
+    model: Qwen/Qwen3-30B-A3B-Instruct-2507
     base_url: https://api.siliconflow.cn/v1
     api_key_env: SILICONFLOW_API_KEY
     temperature: 0.1
@@ -55,7 +55,7 @@ llm_providers:
     timeout: 60
 
   minimax:
-    model: MiniMax-M2.5
+    model: MiniMax-M2.7
     base_url: https://api.minimaxi.com/v1
     api_key_env: MINIMAX_API_KEY
     temperature: 0.1
@@ -69,7 +69,6 @@ llm_providers:
     temperature: 0.1
     max_tokens: 40960
     timeout: 60
-
 
   openai:
     model: gpt-4o
@@ -92,7 +91,7 @@ llm_providers:
     base_url: http://192.168.1.220:8000/v1
     api_key_env: OPENAI_API_KEY
     temperature: 0.1
-    max_tokens: 4096
+    max_tokens: 40960
     timeout: 120
 
   ollama:
@@ -125,6 +124,14 @@ vision_providers:
     max_tokens: 40960
     timeout: 120
 
+  minimax:
+    model: MiniMax-M2.7
+    base_url: https://api.minimaxi.com/v1
+    api_key_env: MINIMAX_API_KEY
+    temperature: 0.1
+    max_tokens: 40960
+    timeout: 60
+
   openai:
     model: gpt-4o
     base_url: https://api.openai.com/v1
@@ -132,6 +139,14 @@ vision_providers:
     temperature: 0.1
     max_tokens: 4096
     timeout: 60
+
+  vllm:
+    model: Qwen3-Next-80B-A3B
+    base_url: http://192.168.1.220:8000/v1
+    api_key_env: OPENAI_API_KEY
+    temperature: 0.1
+    max_tokens: 40960
+    timeout: 120
 
 # ============================================================================
 # 向量嵌入模型提供商配置
@@ -449,7 +464,7 @@ graph_construction:
   entity_relation_extraction:
     enabled: true
     # model_provider: 用于实体关系抽取的 LLM provider（默认 siliconflow；可改为 openai/vllm 等）
-    model_provider: minimax
+    model_provider: null
     confidence_threshold: 0.7
     max_entities_per_chunk: 10
     bench_num: 4
@@ -460,7 +475,7 @@ graph_construction:
   coreference_resolution:
     enabled: true
     # model_provider: 用于指代消解的 LLM provider
-    model_provider: minimax
+    model_provider: null
     max_distance: 5
     bench_num: 4
     max_retries: 3

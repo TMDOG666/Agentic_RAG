@@ -9,9 +9,11 @@
 """
 
 import json
+import ipaddress
 import os
 from typing import Any, Dict, List, Optional, Tuple
 from urllib import error, request
+from urllib.parse import urlparse
 
 from ..config import ProviderType, get_config_manager
 
@@ -381,7 +383,16 @@ class RerankerClient:
             return False
         local_indicators = ["localhost", "127.0.0.1", "0.0.0.0", "local", ".local"]
         url_lower = url.lower()
-        return any(indicator in url_lower for indicator in local_indicators)
+        if any(indicator in url_lower for indicator in local_indicators):
+            return True
+        try:
+            host = (urlparse(url).hostname or "").strip()
+            if not host:
+                return False
+            ip = ipaddress.ip_address(host)
+            return ip.is_loopback or ip.is_private
+        except ValueError:
+            return False
 
     def rerank(
         self,

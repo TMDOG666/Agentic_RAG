@@ -10,6 +10,8 @@ from ..types import (
     DocumentRecord,
     EntityMentionRecord,
     EntityAlignmentRecord,
+    GraphChunkCheckpointRecord,
+    GraphPipelineCheckpointRecord,
     GlobalEntityRecord,
     GlobalRelationRecord,
     GraphEntityRecord,
@@ -227,6 +229,33 @@ class PostgresGraphRepository:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 PRIMARY KEY (task_id)
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS grag_graph_chunk_checkpoints (
+                group_id TEXT NOT NULL,
+                doc_id TEXT NOT NULL,
+                chunk_id TEXT NOT NULL,
+                chunk_index INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                resolved_text TEXT NOT NULL,
+                entity_relation_raw TEXT NOT NULL,
+                parsed_json TEXT NOT NULL,
+                error TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (group_id, doc_id, chunk_id)
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS grag_graph_pipeline_checkpoints (
+                group_id TEXT NOT NULL,
+                doc_id TEXT NOT NULL,
+                stage TEXT NOT NULL,
+                status TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                error TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (group_id, doc_id, stage)
             );
             """,
         ]
@@ -575,6 +604,73 @@ class PostgresGraphRepository:
         finally:
             conn.close()
 
+    def delete_document_graph_assets(self, *, group_id: str, doc_id: str) -> bool:
+        """仅删除某个文档的图谱相关资产，保留 document/chunks/base embeddings。"""
+        if not str(group_id).strip():
+            raise ValueError("group_id is required")
+        if not str(doc_id).strip():
+            return False
+
+        self.ensure_schema()
+
+        conn = self._client.get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "DELETE FROM grag_entity_mentions WHERE group_id=%s AND doc_id=%s",
+                        (group_id, doc_id),
+                    )
+                    cur.execute(
+                        "DELETE FROM grag_relation_alignment WHERE group_id=%s AND doc_id=%s",
+                        (group_id, doc_id),
+                    )
+                    cur.execute(
+                        "DELETE FROM grag_relation_mentions WHERE group_id=%s AND doc_id=%s",
+                        (group_id, doc_id),
+                    )
+                    cur.execute(
+                        "DELETE FROM grag_entity_alignment WHERE group_id=%s AND doc_id=%s",
+                        (group_id, doc_id),
+                    )
+                    cur.execute(
+                        "DELETE FROM grag_relations WHERE group_id=%s AND doc_id=%s",
+                        (group_id, doc_id),
+                    )
+                    cur.execute(
+                        "DELETE FROM grag_entities WHERE group_id=%s AND doc_id=%s",
+                        (group_id, doc_id),
+                    )
+                    cur.execute(
+                        """
+                        DELETE FROM grag_global_entities ge
+                        WHERE ge.group_id = %s
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM grag_entity_alignment ea
+                              WHERE ea.group_id = ge.group_id
+                                AND ea.global_entity_id = ge.global_entity_id
+                          )
+                        """,
+                        (group_id,),
+                    )
+                    cur.execute(
+                        """
+                        DELETE FROM grag_global_relations gr
+                        WHERE gr.group_id = %s
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM grag_relation_alignment ra
+                              WHERE ra.group_id = gr.group_id
+                                AND ra.global_relation_id = gr.global_relation_id
+                          )
+                        """,
+                        (group_id,),
+                    )
+                    return True
+        finally:
+            conn.close()
+
 
     def list_group_documents(
         self,
@@ -633,6 +729,244 @@ class PostgresGraphRepository:
                         doc_name=str(doc_name),
                         doc_time=str(doc_time),
                         metadata=meta,
+                    )
+                )
+            return out
+        finally:
+            conn.close()
+
+    def list_doc_chunks(
+        self,
+        *,
+        group_id: str,
+        doc_id: str,
+        limit: int = 200000,
+    ) -> list[ChunkRecord]:
+        if not str(group_id).strip():
+            raise ValueError("group_id is required")
+        if not str(doc_id).strip():
+            return []
+
+        self.ensure_schema()
+        conn = self._client.get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT chunk_id, chunk_index, text
+                        FROM grag_chunks
+                        WHERE group_id=%s AND doc_id=%s
+                        ORDER BY chunk_index ASC
+                        LIMIT %s;
+                        """,
+                        (group_id, doc_id, int(limit)),
+                    )
+                    rows = cur.fetchall() or []
+            return [
+                ChunkRecord(
+                    group_id=str(group_id),
+                    doc_id=str(doc_id),
+                    chunk_id=str(row[0]),
+                    index=int(row[1]),
+                    text=str(row[2]),
+                )
+                for row in rows
+            ]
+        finally:
+            conn.close()
+
+    def upsert_graph_chunk_checkpoint(self, *, checkpoint: GraphChunkCheckpointRecord) -> None:
+        import json
+
+        if not str(checkpoint.group_id).strip():
+            raise ValueError("group_id is required")
+        if not str(checkpoint.doc_id).strip():
+            raise ValueError("doc_id is required")
+        if not str(checkpoint.chunk_id).strip():
+            raise ValueError("chunk_id is required")
+
+        self.ensure_schema()
+        conn = self._client.get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO grag_graph_chunk_checkpoints (
+                            group_id, doc_id, chunk_id, chunk_index, status,
+                            resolved_text, entity_relation_raw, parsed_json, error, updated_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (group_id, doc_id, chunk_id)
+                        DO UPDATE SET
+                            chunk_index = EXCLUDED.chunk_index,
+                            status = EXCLUDED.status,
+                            resolved_text = EXCLUDED.resolved_text,
+                            entity_relation_raw = EXCLUDED.entity_relation_raw,
+                            parsed_json = EXCLUDED.parsed_json,
+                            error = EXCLUDED.error,
+                            updated_at = EXCLUDED.updated_at;
+                        """,
+                        (
+                            checkpoint.group_id,
+                            checkpoint.doc_id,
+                            checkpoint.chunk_id,
+                            int(checkpoint.chunk_index),
+                            checkpoint.status,
+                            checkpoint.resolved_text,
+                            checkpoint.entity_relation_raw,
+                            json.dumps(checkpoint.parsed_json or {}, ensure_ascii=False),
+                            checkpoint.error,
+                            checkpoint.updated_at,
+                        ),
+                    )
+        finally:
+            conn.close()
+
+    def list_graph_chunk_checkpoints(
+        self,
+        *,
+        group_id: str,
+        doc_id: str,
+    ) -> list[GraphChunkCheckpointRecord]:
+        import json
+
+        if not str(group_id).strip():
+            raise ValueError("group_id is required")
+        if not str(doc_id).strip():
+            return []
+
+        self.ensure_schema()
+        conn = self._client.get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT chunk_id, chunk_index, status, resolved_text,
+                               entity_relation_raw, parsed_json, error, updated_at
+                        FROM grag_graph_chunk_checkpoints
+                        WHERE group_id=%s AND doc_id=%s
+                        ORDER BY chunk_index ASC;
+                        """,
+                        (group_id, doc_id),
+                    )
+                    rows = cur.fetchall() or []
+            out: list[GraphChunkCheckpointRecord] = []
+            for row in rows:
+                parsed_json: dict = {}
+                try:
+                    raw = json.loads(row[5] or "{}")
+                    if isinstance(raw, dict):
+                        parsed_json = raw
+                except Exception:
+                    parsed_json = {}
+                out.append(
+                    GraphChunkCheckpointRecord(
+                        group_id=str(group_id),
+                        doc_id=str(doc_id),
+                        chunk_id=str(row[0]),
+                        chunk_index=int(row[1]),
+                        status=str(row[2]),
+                        resolved_text=str(row[3] or ""),
+                        entity_relation_raw=str(row[4] or ""),
+                        parsed_json=parsed_json,
+                        error=str(row[6] or ""),
+                        updated_at=str(row[7] or ""),
+                    )
+                )
+            return out
+        finally:
+            conn.close()
+
+    def upsert_graph_pipeline_checkpoint(self, *, checkpoint: GraphPipelineCheckpointRecord) -> None:
+        import json
+
+        if not str(checkpoint.group_id).strip():
+            raise ValueError("group_id is required")
+        if not str(checkpoint.doc_id).strip():
+            raise ValueError("doc_id is required")
+        if not str(checkpoint.stage).strip():
+            raise ValueError("stage is required")
+
+        self.ensure_schema()
+        conn = self._client.get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO grag_graph_pipeline_checkpoints (
+                            group_id, doc_id, stage, status, payload_json, error, updated_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (group_id, doc_id, stage)
+                        DO UPDATE SET
+                            status = EXCLUDED.status,
+                            payload_json = EXCLUDED.payload_json,
+                            error = EXCLUDED.error,
+                            updated_at = EXCLUDED.updated_at;
+                        """,
+                        (
+                            checkpoint.group_id,
+                            checkpoint.doc_id,
+                            checkpoint.stage,
+                            checkpoint.status,
+                            json.dumps(checkpoint.payload_json or {}, ensure_ascii=False),
+                            checkpoint.error,
+                            checkpoint.updated_at,
+                        ),
+                    )
+        finally:
+            conn.close()
+
+    def list_graph_pipeline_checkpoints(
+        self,
+        *,
+        group_id: str,
+        doc_id: str,
+    ) -> list[GraphPipelineCheckpointRecord]:
+        import json
+
+        if not str(group_id).strip():
+            raise ValueError("group_id is required")
+        if not str(doc_id).strip():
+            return []
+
+        self.ensure_schema()
+        conn = self._client.get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT stage, status, payload_json, error, updated_at
+                        FROM grag_graph_pipeline_checkpoints
+                        WHERE group_id=%s AND doc_id=%s
+                        ORDER BY stage ASC;
+                        """,
+                        (group_id, doc_id),
+                    )
+                    rows = cur.fetchall() or []
+            out: list[GraphPipelineCheckpointRecord] = []
+            for row in rows:
+                payload_json: dict = {}
+                try:
+                    raw = json.loads(row[2] or "{}")
+                    if isinstance(raw, dict):
+                        payload_json = raw
+                except Exception:
+                    payload_json = {}
+                out.append(
+                    GraphPipelineCheckpointRecord(
+                        group_id=str(group_id),
+                        doc_id=str(doc_id),
+                        stage=str(row[0]),
+                        status=str(row[1]),
+                        payload_json=payload_json,
+                        error=str(row[3] or ""),
+                        updated_at=str(row[4] or ""),
                     )
                 )
             return out
@@ -1554,6 +1888,93 @@ class PostgresGraphRepository:
                 )
                 for row in rows
             ]
+        finally:
+            conn.close()
+
+    def list_recoverable_ingest_tasks(self, *, limit: int = 200) -> list[IngestTaskRecord]:
+        self.ensure_schema()
+        conn = self._client.get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT task_id, group_id, doc_id, doc_name, doc_time,
+                               status, stage, message, created_at, updated_at
+                        FROM grag_ingest_tasks
+                        WHERE status IN ('pending', 'running')
+                        ORDER BY updated_at ASC, created_at ASC
+                        LIMIT %s;
+                        """,
+                        (int(limit),),
+                    )
+                    rows = cur.fetchall() or []
+            return [
+                IngestTaskRecord(
+                    task_id=str(row[0]),
+                    group_id=str(row[1]),
+                    doc_id=str(row[2]),
+                    doc_name=str(row[3]),
+                    doc_time=str(row[4]),
+                    status=str(row[5]),
+                    stage=str(row[6]),
+                    message=str(row[7]),
+                    created_at=str(row[8]),
+                    updated_at=str(row[9]),
+                )
+                for row in rows
+            ]
+        finally:
+            conn.close()
+
+    def delete_ingest_task(self, *, task_id: str) -> bool:
+        if not str(task_id or "").strip():
+            return False
+        self.ensure_schema()
+        conn = self._client.get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        DELETE FROM grag_ingest_tasks
+                        WHERE task_id = %s;
+                        """,
+                        (str(task_id),),
+                    )
+                    deleted = int(cur.rowcount or 0)
+            return deleted > 0
+        finally:
+            conn.close()
+
+    def clear_ingest_tasks(
+        self,
+        *,
+        group_id: str | None = None,
+        doc_id: str | None = None,
+        statuses: Sequence[str] | None = None,
+    ) -> int:
+        self.ensure_schema()
+        where: list[str] = []
+        params: list[object] = []
+        if str(group_id or "").strip():
+            where.append("group_id = %s")
+            params.append(str(group_id))
+        if str(doc_id or "").strip():
+            where.append("doc_id = %s")
+            params.append(str(doc_id))
+        normalized_statuses = [str(s).strip() for s in (statuses or []) if str(s).strip()]
+        if normalized_statuses:
+            where.append("status = ANY(%s)")
+            params.append(normalized_statuses)
+        sql = "DELETE FROM grag_ingest_tasks " + (f"WHERE {' AND '.join(where)}" if where else "") + ";"
+        conn = self._client.get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(sql, tuple(params))
+                    deleted = int(cur.rowcount or 0)
+            return deleted
         finally:
             conn.close()
 

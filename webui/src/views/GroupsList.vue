@@ -3,9 +3,9 @@
     <section class="groups-hero view-card">
       <div>
         <div class="eyebrow">Collections</div>
-        <h2>把知识库按业务分组，清晰管理每条入库链路。</h2>
+        <h2>把知识库按业务分组，统一查看每个分组的文档录入与图谱状态。</h2>
         <p>
-          这里集中展示所有分组入口。进入分组后，可以继续处理文档录入、日志追踪、图谱查看和 Agent 对话。
+          这里不仅能管理分组，还能快速看到每个分组当前有多少文档、多少仅完成基础入库、多少图谱已完成、以及是否存在失败待重试的文档。
         </p>
       </div>
 
@@ -29,7 +29,7 @@
             <div class="section-subtitle">支持创建、编辑、删除和进入分组工作台。</div>
           </div>
           <div class="header-actions">
-            <el-button @click="openCreate" type="primary">新建分组</el-button>
+            <el-button type="primary" @click="openCreate">新建分组</el-button>
             <el-button :loading="loading" @click="load">刷新</el-button>
           </div>
         </div>
@@ -37,17 +37,40 @@
 
       <el-table :data="groups" v-loading="loading" row-key="group_id" class="shell-table" empty-text="还没有任何分组">
         <el-table-column prop="group_id" label="Group ID" min-width="180">
-          <template #default="scope">
-            <div class="group-id mono">{{ scope.row.group_id }}</div>
+          <template #default="{ row }">
+            <div class="group-id mono">{{ row.group_id }}</div>
           </template>
         </el-table-column>
         <el-table-column prop="group_name" label="名称" min-width="180" />
-        <el-table-column prop="group_desc" label="描述" min-width="280" />
+        <el-table-column prop="group_desc" label="描述" min-width="240" />
+        <el-table-column label="文档状态概览" min-width="340">
+          <template #default="{ row }">
+            <div class="status-summary">
+              <span class="summary-pill is-info">文档 {{ summaryOf(row.group_id).total }}</span>
+              <span class="summary-pill is-warning">基础 {{ summaryOf(row.group_id).base }}</span>
+              <span class="summary-pill is-success">图谱完成 {{ summaryOf(row.group_id).graph }}</span>
+              <span class="summary-pill is-danger">失败 {{ summaryOf(row.group_id).failed }}</span>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="最近文档状态" min-width="260">
+          <template #default="{ row }">
+            <div v-if="summaryOf(row.group_id).recent.length" class="recent-docs">
+              <div v-for="doc in summaryOf(row.group_id).recent" :key="`${row.group_id}-${doc.doc_id}`" class="recent-docs__item">
+                <span class="recent-docs__name">{{ doc.doc_name || doc.doc_id }}</span>
+                <span class="recent-docs__stage" :class="`is-${docTone(doc.metadata?.ingest_stage)}`">
+                  {{ docStageText(doc.metadata?.ingest_stage) }}
+                </span>
+              </div>
+            </div>
+            <span v-else class="group-id">暂无文档</span>
+          </template>
+        </el-table-column>
         <el-table-column label="操作" width="180">
-          <template #default="scope">
+          <template #default="{ row }">
             <div class="table-actions">
-              <el-button size="small" type="primary" @click="go(scope.row.group_id)">进入</el-button>
-              <el-dropdown @command="(cmd) => onRowCmd(cmd, scope.row)">
+              <el-button size="small" type="primary" @click="go(row.group_id)">进入</el-button>
+              <el-dropdown @command="(cmd) => onRowCmd(cmd, row)">
                 <el-button size="small">更多</el-button>
                 <template #dropdown>
                   <el-dropdown-menu>
@@ -83,7 +106,7 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '../lib/api'
@@ -91,6 +114,7 @@ import { api } from '../lib/api'
 const router = useRouter()
 const loading = ref(false)
 const groups = ref([])
+const docsByGroup = ref({})
 
 const dlg = ref(false)
 const saving = ref(false)
@@ -100,6 +124,55 @@ const form = reactive({
   group_name: '',
   group_desc: '',
 })
+
+const summaries = computed(() => {
+  const out = {}
+  for (const group of groups.value) {
+    const docs = Array.isArray(docsByGroup.value[group.group_id]) ? docsByGroup.value[group.group_id] : []
+    const stats = { total: docs.length, base: 0, graph: 0, failed: 0, recent: docs.slice(0, 3) }
+    for (const doc of docs) {
+      const stage = String(doc?.metadata?.ingest_stage || '').trim()
+      if (stage === 'graph_completed') stats.graph += 1
+      else if (stage === 'graph_failed') stats.failed += 1
+      else stats.base += 1
+    }
+    out[group.group_id] = stats
+  }
+  return out
+})
+
+function summaryOf(groupId) {
+  return summaries.value[groupId] || { total: 0, base: 0, graph: 0, failed: 0, recent: [] }
+}
+
+function docStageText(stage) {
+  if (stage === 'base_completed') return '仅基础可用'
+  if (stage === 'graph_processing') return '图谱构建中'
+  if (stage === 'graph_completed') return '图谱已完成'
+  if (stage === 'graph_failed') return '图谱失败'
+  return '状态未知'
+}
+
+function docTone(stage) {
+  if (stage === 'graph_completed') return 'success'
+  if (stage === 'graph_failed') return 'danger'
+  if (stage === 'graph_processing') return 'warning'
+  return 'info'
+}
+
+async function loadGroupDocs() {
+  const entries = await Promise.all(
+    groups.value.map(async (group) => {
+      try {
+        const res = await api.get(`/groups/${encodeURIComponent(group.group_id)}/documents`, { params: { limit: 20 } })
+        return [group.group_id, Array.isArray(res.data) ? res.data : []]
+      } catch {
+        return [group.group_id, []]
+      }
+    }),
+  )
+  docsByGroup.value = Object.fromEntries(entries)
+}
 
 async function load() {
   loading.value = true
@@ -112,6 +185,7 @@ async function load() {
       const arr = Array.isArray(res.data) ? res.data : []
       groups.value = arr.map((g) => ({ group_id: g.group_id, group_name: '', group_desc: '' }))
     }
+    await loadGroupDocs()
   } finally {
     loading.value = false
   }
@@ -249,6 +323,69 @@ onMounted(load)
 .group-id {
   font-size: 12px;
   color: var(--text-sub);
+}
+
+.table-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.status-summary {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.summary-pill,
+.recent-docs__stage {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.recent-docs {
+  display: grid;
+  gap: 8px;
+}
+
+.recent-docs__item {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.recent-docs__name {
+  font-size: 13px;
+  color: var(--brand-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.is-success {
+  background: #d6f5df;
+  color: #0f6a3b;
+}
+
+.is-warning {
+  background: #fff0c7;
+  color: #8a5a00;
+}
+
+.is-danger {
+  background: #ffd7d7;
+  color: #9c2323;
+}
+
+.is-info {
+  background: #dbeaf4;
+  color: #31556f;
 }
 
 @media (max-width: 900px) {

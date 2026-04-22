@@ -1,17 +1,12 @@
-"""grag.model.embedding_client
+"""统一的 Embedding 客户端。"""
 
-向量嵌入客户端。
+from __future__ import annotations
 
-职责：
-- 创建并管理 Embedding 模型实例
-- 屏蔽不同 provider 的差异
-- 提供文本/查询的统一嵌入接口
-- 对超长文本做兜底拆分，避免单条输入超过模型上下文上限
-"""
-
+import ipaddress
 import os
 import re
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_core.embeddings import Embeddings
@@ -21,12 +16,14 @@ from ..config import ProviderType, get_config_manager
 
 
 class EmbeddingClient:
-    """统一的向量嵌入客户端。"""
+    """按当前配置创建并管理嵌入模型实例。"""
 
     def __init__(self, provider_name: Optional[str] = None):
         self.provider_name = provider_name
         self._embeddings: Optional[Embeddings] = None
-        self._settings = get_config_manager().get_settings()
+
+    def _get_settings(self):
+        return get_config_manager().get_settings()
 
     def get_embeddings(self) -> Embeddings:
         if self._embeddings is None:
@@ -34,11 +31,9 @@ class EmbeddingClient:
         return self._embeddings
 
     def _create_embeddings(self) -> Embeddings:
-        provider_config = self._settings.get_provider_config(
-            ProviderType.EMBEDDING,
-            self.provider_name,
-        )
-        provider_name = self.provider_name or self._settings.embedding_provider
+        settings = self._get_settings()
+        provider_config = settings.get_provider_config(ProviderType.EMBEDDING, self.provider_name)
+        provider_name = self.provider_name or settings.embedding_provider
 
         model = self._get_env_override("GRAG_EMBEDDING_MODEL") or provider_config.model
         base_url = self._get_env_override("GRAG_EMBEDDING_BASE_URL") or provider_config.base_url
@@ -56,7 +51,6 @@ class EmbeddingClient:
                 api_key = self._get_api_key(provider_config)
                 if not api_key and base_url and not self._is_local_url(base_url):
                     raise ValueError(f"API Key 不能为空 (provider: {provider_name})")
-
                 embeddings = OpenAIEmbeddings(
                     model=model,
                     api_key=api_key or "EMPTY",
@@ -67,7 +61,6 @@ class EmbeddingClient:
 
             if hasattr(embeddings, "_check_dimensions"):
                 self._validate_dimensions(embeddings, dimension)
-
             return embeddings
         except Exception as exc:
             raise RuntimeError(f"创建嵌入模型失败: {exc}") from exc
@@ -77,12 +70,13 @@ class EmbeddingClient:
         if api_key:
             return api_key
 
-        if hasattr(provider_config, "api_key_env") and provider_config.api_key_env:
+        if getattr(provider_config, "api_key_env", None):
             api_key = os.environ.get(provider_config.api_key_env)
             if api_key:
                 return api_key
 
-        provider_name = self.provider_name or self._settings.embedding_provider
+        settings = self._get_settings()
+        provider_name = self.provider_name or settings.embedding_provider
         if provider_name == "siliconflow":
             api_key = os.environ.get("SILICONFLOW_API_KEY")
             if api_key:
@@ -90,23 +84,32 @@ class EmbeddingClient:
 
         if provider_name == "huggingface":
             return None
-
         if provider_config.base_url and self._is_local_url(provider_config.base_url):
             return "EMPTY"
-
         return None
 
-    def _get_env_override(self, env_var: str) -> Optional[str]:
+    @staticmethod
+    def _get_env_override(env_var: str) -> Optional[str]:
         return os.environ.get(env_var)
 
-    def _is_local_url(self, url: str) -> bool:
+    @staticmethod
+    def _is_local_url(url: str) -> bool:
         if not url:
             return False
         url_lower = url.lower()
-        local_indicators = ["localhost", "127.0.0.1", "0.0.0.0", "local", ".local"]
-        return any(indicator in url_lower for indicator in local_indicators)
+        if any(indicator in url_lower for indicator in ["localhost", "127.0.0.1", "0.0.0.0", "local", ".local"]):
+            return True
+        try:
+            host = (urlparse(url).hostname or "").strip()
+            if not host:
+                return False
+            ip = ipaddress.ip_address(host)
+            return ip.is_loopback or ip.is_private
+        except ValueError:
+            return False
 
-    def _validate_dimensions(self, embeddings: Embeddings, expected_dim: int) -> None:
+    @staticmethod
+    def _validate_dimensions(embeddings: Embeddings, expected_dim: int) -> None:
         try:
             test_embedding = embeddings.embed_query("test")
             actual_dim = len(test_embedding)
@@ -116,22 +119,13 @@ class EmbeddingClient:
             pass
 
     def embed_texts(self, texts: List[str]) -> List[List[float]]:
-        """嵌入文本列表。
-
-        两层保护：
-        1. 正常短文本走批处理。
-        2. 批处理失败后降级到逐条；逐条仍超长时继续拆分并聚合。
-        """
         try:
             embeddings = self.get_embeddings()
             if not texts:
                 return []
 
-            provider_config = self._settings.get_provider_config(
-                ProviderType.EMBEDDING,
-                self.provider_name,
-            )
-
+            settings = self._get_settings()
+            provider_config = settings.get_provider_config(ProviderType.EMBEDDING, self.provider_name)
             max_bs = getattr(provider_config, "max_batch_size", None)
             try:
                 max_bs_int = int(max_bs) if max_bs is not None else 0
@@ -175,8 +169,7 @@ class EmbeddingClient:
 
     def embed_query(self, text: str) -> List[float]:
         try:
-            embeddings = self.get_embeddings()
-            return embeddings.embed_query(text)
+            return self.get_embeddings().embed_query(text)
         except Exception as exc:
             raise RuntimeError(f"查询嵌入失败: {exc}") from exc
 
@@ -189,12 +182,10 @@ class EmbeddingClient:
             return False
 
     def get_provider_info(self) -> Dict[str, Any]:
-        provider_config = self._settings.get_provider_config(
-            ProviderType.EMBEDDING,
-            self.provider_name,
-        )
+        settings = self._get_settings()
+        provider_config = settings.get_provider_config(ProviderType.EMBEDDING, self.provider_name)
         return {
-            "provider_name": self.provider_name or self._settings.embedding_provider,
+            "provider_name": self.provider_name or settings.embedding_provider,
             "model": provider_config.model,
             "base_url": provider_config.base_url,
             "dimension": provider_config.dimension,
@@ -203,10 +194,8 @@ class EmbeddingClient:
         }
 
     def get_dimension(self) -> int:
-        provider_config = self._settings.get_provider_config(
-            ProviderType.EMBEDDING,
-            self.provider_name,
-        )
+        settings = self._get_settings()
+        provider_config = settings.get_provider_config(ProviderType.EMBEDDING, self.provider_name)
         return provider_config.dimension
 
     def refresh_embeddings(self) -> None:
@@ -215,11 +204,12 @@ class EmbeddingClient:
     def _should_split_text_for_embedding(self, text: str) -> bool:
         return self._estimate_token_count(text) > self._get_safe_embedding_token_limit()
 
-    def _get_safe_embedding_token_limit(self) -> int:
-        # 服务端上限是 4096，这里保守留足余量。
+    @staticmethod
+    def _get_safe_embedding_token_limit() -> int:
         return 2400
 
-    def _estimate_token_count(self, text: str) -> int:
+    @staticmethod
+    def _estimate_token_count(text: str) -> int:
         if not text:
             return 0
         token_like_units = re.findall(r"[A-Za-z0-9]+|[\u4e00-\u9fff]|[^\w\s]", text)
@@ -276,22 +266,25 @@ class EmbeddingClient:
             units = self._split_by_sentence(normalized)
         if len(units) == 1:
             units = self._split_by_fixed_chars(normalized, 600)
-
         return self._merge_units_by_token_limit(units, limit)
 
-    def _split_by_double_newline(self, text: str) -> List[str]:
+    @staticmethod
+    def _split_by_double_newline(text: str) -> List[str]:
         parts = [part.strip() for part in text.split("\n\n") if part.strip()]
         return parts or [text]
 
-    def _split_by_single_newline(self, text: str) -> List[str]:
+    @staticmethod
+    def _split_by_single_newline(text: str) -> List[str]:
         parts = [part.strip() for part in text.split("\n") if part.strip()]
         return parts or [text]
 
-    def _split_by_sentence(self, text: str) -> List[str]:
-        parts = [part.strip() for part in re.split(r"(?<=[。！？!?\.])\s*", text) if part.strip()]
+    @staticmethod
+    def _split_by_sentence(text: str) -> List[str]:
+        parts = [part.strip() for part in re.split(r"(?<=[。！？?!\.])\s*", text) if part.strip()]
         return parts or [text]
 
-    def _split_by_fixed_chars(self, text: str, step: int) -> List[str]:
+    @staticmethod
+    def _split_by_fixed_chars(text: str, step: int) -> List[str]:
         return [text[i : i + step].strip() for i in range(0, len(text), step) if text[i : i + step].strip()]
 
     def _merge_units_by_token_limit(self, units: List[str], limit: int) -> List[str]:
@@ -319,10 +312,10 @@ class EmbeddingClient:
 
         if current:
             merged.append(current)
-
         return merged or [""]
 
-    def _average_vectors(self, vectors: List[List[float]]) -> List[float]:
+    @staticmethod
+    def _average_vectors(vectors: List[List[float]]) -> List[float]:
         dimension = len(vectors[0])
         sums = [0.0] * dimension
         for vector in vectors:
@@ -331,13 +324,10 @@ class EmbeddingClient:
         count = float(len(vectors))
         return [value / count for value in sums]
 
-    def _is_context_length_error(self, exc: Exception) -> bool:
+    @staticmethod
+    def _is_context_length_error(exc: Exception) -> bool:
         message = str(exc).lower()
-        return (
-            "maximum context length" in message
-            or "input_tokens" in message
-            or "context length" in message
-        )
+        return "maximum context length" in message or "input_tokens" in message or "context length" in message
 
 
 _default_embedding_client: Optional[EmbeddingClient] = None
@@ -351,20 +341,16 @@ def get_embedding_client(provider_name: Optional[str] = None) -> EmbeddingClient
 
 
 def get_embeddings(provider_name: Optional[str] = None) -> Embeddings:
-    client = get_embedding_client(provider_name)
-    return client.get_embeddings()
+    return get_embedding_client(provider_name).get_embeddings()
 
 
 def embed_texts(texts: List[str], provider_name: Optional[str] = None) -> List[List[float]]:
-    client = get_embedding_client(provider_name)
-    return client.embed_texts(texts)
+    return get_embedding_client(provider_name).embed_texts(texts)
 
 
 def embed_query(text: str, provider_name: Optional[str] = None) -> List[float]:
-    client = get_embedding_client(provider_name)
-    return client.embed_query(text)
+    return get_embedding_client(provider_name).embed_query(text)
 
 
 def test_embedding_connection(provider_name: Optional[str] = None) -> bool:
-    client = get_embedding_client(provider_name)
-    return client.test_connection()
+    return get_embedding_client(provider_name).test_connection()

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, File, UploadFile
 
-from api.schemas.ingest import IngestTextIn, IngestOut
+from api.schemas.ingest import IngestRetryIn, IngestTextIn, IngestOut
 from api.services.ingest_service import IngestService
 
 router = APIRouter()
@@ -41,7 +41,6 @@ def ingest_upload(
     doc_time: str,
     file: UploadFile = File(...),
     doc_id: str | None = None,
-    standardize: bool = True,
 ) -> IngestOut:
     """上传文件并录入。
 
@@ -60,5 +59,10 @@ def ingest_upload(
         doc_time=doc_time,
         file=file,
         doc_id=doc_id,
-        standardize=standardize,
     )
+
+
+@router.post("/retry-graph")
+def retry_graph(payload: IngestRetryIn) -> IngestOut:
+    svc = IngestService()
+    return svc.retry_graph(payload)

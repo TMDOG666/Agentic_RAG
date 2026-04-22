@@ -3,10 +3,9 @@
     <section class="hero view-card">
       <div class="hero__copy">
         <div class="eyebrow">Ingest Control Room</div>
-        <h2 class="hero__title">文档录入、任务追踪和后端日志放在同一个工作台里。</h2>
+        <h2 class="hero__title">文档入库、任务追踪和后端日志集中在一个工作台里</h2>
         <p class="hero__desc">
-          提交文本或文件后，界面会持续刷新任务状态与日志。日志区域会优先按文档过滤；如果带上 `task_id`
-          没命中，也会自动回退一次，避免看起来像“没有日志”。
+          基础入库会优先完成，保证向量检索和关键词检索可用；图谱构建在后端异步推进，失败后也可以保留中间状态继续重试。
         </p>
       </div>
       <div class="hero__stats">
@@ -19,7 +18,7 @@
           <strong class="hero-stat__value">{{ runningTasks }}</strong>
         </div>
         <div class="hero-stat">
-          <span class="hero-stat__label">失败数</span>
+          <span class="hero-stat__label">失败任务</span>
           <strong class="hero-stat__value">{{ failedTasks }}</strong>
         </div>
       </div>
@@ -31,44 +30,87 @@
           <div class="panel__header">
             <div>
               <div class="panel__title">文档资产</div>
-              <div class="panel__sub">基础文档会立刻保存，图谱与融合在后端异步完成。</div>
+              <div class="panel__sub">图谱失败后可保留基础检索、块级进度和融合阶段检查点</div>
             </div>
             <div class="panel__actions">
-              <el-button @click="openUpload" type="success">上传文件</el-button>
-              <el-button @click="openCreate" type="primary">录入文本</el-button>
-              <el-button @click="refreshAll" :loading="refreshing">刷新</el-button>
+              <el-button type="success" @click="openUpload">上传文件</el-button>
+              <el-button type="primary" @click="openCreate">录入文本</el-button>
+              <el-button :loading="refreshing" @click="refreshAll">刷新</el-button>
             </div>
           </div>
         </template>
 
-        <el-table :data="docs" v-loading="docsLoading" row-key="doc_id" class="shell-table" empty-text="当前分组还没有文档">
-          <el-table-column prop="doc_name" label="文档" min-width="260">
-            <template #default="scope">
+        <el-table
+          :data="docs"
+          v-loading="docsLoading"
+          row-key="doc_id"
+          class="shell-table"
+          empty-text="当前分组还没有文档"
+        >
+          <el-table-column prop="doc_name" label="文档" min-width="220">
+            <template #default="{ row }">
               <div class="doc-cell">
-                <div class="doc-cell__name">{{ scope.row.doc_name || scope.row.doc_id }}</div>
-                <div class="doc-cell__meta mono">doc_id: {{ scope.row.doc_id }}</div>
+                <div class="doc-cell__name">{{ row.doc_name || row.doc_id }}</div>
+                <div class="doc-cell__meta mono">doc_id: {{ row.doc_id }}</div>
               </div>
             </template>
           </el-table-column>
-          <el-table-column prop="doc_time" label="时间" width="220" />
-          <el-table-column label="最近任务" width="230">
-            <template #default="scope">
-              <div v-if="taskMap[scope.row.doc_id]" class="task-pill">
-                <span class="status-dot" :class="`is-${taskTone(taskMap[scope.row.doc_id].status)}`" />
+          <el-table-column prop="doc_time" label="时间" width="200" />
+          <el-table-column label="录入状态" width="180">
+            <template #default="{ row }">
+              <div class="task-pill">
+                <span class="status-dot" :class="`is-${docStageTone(row)}`" />
                 <div>
-                  <div>{{ taskLabel(taskMap[scope.row.doc_id]) }}</div>
-                  <div class="task-pill__sub">{{ taskMap[scope.row.doc_id].updated_at }}</div>
+                  <div>{{ docStageLabel(row) }}</div>
+                  <div class="task-pill__sub">{{ docStageHint(row) }}</div>
+                </div>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column label="图谱进度" min-width="300">
+            <template #default="{ row }">
+              <div class="graph-progress">
+                <div class="graph-progress__summary">
+                  <span class="summary-pill is-success">完成 {{ graphProgress(row).completed_chunks }}</span>
+                  <span class="summary-pill is-danger">失败 {{ graphProgress(row).failed_chunks }}</span>
+                  <span class="summary-pill is-warning">处理中 {{ graphProgress(row).processing_chunks }}</span>
+                  <span class="summary-pill is-info">总数 {{ graphProgress(row).total_chunks }}</span>
+                </div>
+                <div class="graph-progress__pipeline">
+                  <div class="graph-progress__stage">{{ graphStageLabel(row) }}</div>
+                  <div class="graph-progress__hint">{{ graphStageHint(row) }}</div>
+                </div>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column label="最近任务" width="220">
+            <template #default="{ row }">
+              <div v-if="taskMap[row.doc_id]" class="task-pill">
+                <span class="status-dot" :class="`is-${taskTone(taskMap[row.doc_id].status)}`" />
+                <div>
+                  <div>{{ taskLabel(taskMap[row.doc_id]) }}</div>
+                  <div class="task-pill__sub">{{ taskMap[row.doc_id].updated_at }}</div>
                 </div>
               </div>
               <span v-else class="task-empty">暂无任务</span>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="220">
-            <template #default="scope">
+          <el-table-column label="操作" width="300">
+            <template #default="{ row }">
               <div class="table-actions">
-                <el-button size="small" @click="openReingest(scope.row)">重建</el-button>
-                <el-button size="small" @click="focusDocLogs(scope.row.doc_id)">日志</el-button>
-                <el-button size="small" type="danger" @click="remove(scope.row)">删除</el-button>
+                <el-button size="small" @click="openReingest(row)">重建</el-button>
+                <el-button size="small" @click="openChunks(row)">文本块</el-button>
+                <el-button
+                  v-if="canRetryGraph(row)"
+                  size="small"
+                  type="warning"
+                  :loading="retryingDocId === row.doc_id"
+                  @click="retryGraph(row)"
+                >
+                  重试图谱
+                </el-button>
+                <el-button size="small" @click="focusDocLogs(row.doc_id)">日志</el-button>
+                <el-button size="small" type="danger" @click="remove(row)">删除</el-button>
               </div>
             </template>
           </el-table-column>
@@ -80,7 +122,7 @@
           <div class="panel__header panel__header--stack">
             <div>
               <div class="panel__title">入库任务队列</div>
-              <div class="panel__sub">自动轮询中，状态会推进到 `completed` 或 `failed`。</div>
+              <div class="panel__sub">自动轮询中，状态会推进到 completed 或 failed</div>
             </div>
             <div class="panel__actions">
               <el-switch v-model="autoRefresh" active-text="自动刷新" inactive-text="手动" />
@@ -89,7 +131,11 @@
         </template>
 
         <div class="task-board" v-loading="tasksLoading">
-          <div v-if="!tasks.length" class="task-board__empty">当前还没有入库任务。</div>
+          <div class="task-board__toolbar">
+            <el-button @click="clearFinishedTasks" :disabled="!tasks.length">清理已结束</el-button>
+            <el-switch v-model="autoRefresh" active-text="自动刷新" inactive-text="手动" />
+          </div>
+          <div v-if="!tasks.length" class="task-board__empty">当前还没有入库任务</div>
           <button
             v-for="task in tasks"
             :key="task.task_id"
@@ -104,6 +150,17 @@
             <div class="task-card__title">{{ task.doc_name || task.doc_id }}</div>
             <div class="task-card__meta">{{ task.stage }} · {{ task.doc_id }}</div>
             <div class="task-card__message">{{ task.message }}</div>
+            <div class="task-card__actions">
+              <el-button
+                size="small"
+                text
+                type="danger"
+                :disabled="['pending', 'running'].includes(task.status)"
+                @click.stop="deleteTask(task)"
+              >
+                删除任务
+              </el-button>
+            </div>
           </button>
         </div>
       </el-card>
@@ -115,12 +172,10 @@
           <div class="panel__header">
             <div>
               <div class="panel__title">后端日志</div>
-              <div class="panel__sub">
-                支持按 `group_id / doc_id / task_id / contains` 过滤。部分日志行没有 `task_id`，因此前端会自动做一次回退查询。
-              </div>
+              <div class="panel__sub">支持按 group_id、doc_id、task_id 和关键字过滤</div>
             </div>
             <div class="panel__actions">
-              <el-button @click="loadLogs" :loading="logsLoading">刷新日志</el-button>
+              <el-button :loading="logsLoading" @click="loadLogs">刷新日志</el-button>
             </div>
           </div>
         </template>
@@ -155,7 +210,7 @@
           <el-input v-model="form.doc_id" placeholder="可选：留空新建；填写则按同一 doc_id 重建" class="glass-input" />
         </el-form-item>
         <el-form-item label="doc_name">
-          <el-input v-model="form.doc_name" placeholder="例如：report.txt" class="glass-input" />
+          <el-input v-model="form.doc_name" placeholder="例如 report.txt" class="glass-input" />
         </el-form-item>
         <el-form-item label="doc_time">
           <el-input v-model="form.doc_time" placeholder="ISO8601，例如 2026-03-05T07:12:34Z" class="glass-input" />
@@ -178,9 +233,6 @@
         <el-form-item label="文档时间">
           <el-date-picker v-model="uploadForm.doc_time" type="datetime" placeholder="请选择时间" style="width: 100%" />
         </el-form-item>
-        <el-form-item label="标准化">
-          <el-switch v-model="uploadForm.standardize" />
-        </el-form-item>
         <el-form-item label="文件">
           <el-upload
             drag
@@ -193,7 +245,7 @@
           >
             <div class="upload-dropzone">
               <div class="upload-dropzone__title">拖拽文件到这里</div>
-              <div class="upload-dropzone__sub">支持当前后端配置允许的文档、Office、表格和图片格式</div>
+              <div class="upload-dropzone__sub">支持当前后端允许的文档、Office、表格和图片格式</div>
             </div>
           </el-upload>
         </el-form-item>
@@ -203,6 +255,83 @@
         <el-button type="primary" :loading="uploading" @click="upload">提交任务</el-button>
       </template>
     </el-dialog>
+
+    <el-drawer v-model="chunksDrawer" :title="chunksTitle" size="55%" append-to-body>
+      <div class="chunks-panel" v-loading="chunksLoading">
+        <div class="chunks-panel__meta" v-if="chunksDoc">
+          <span>doc_id: {{ chunksDoc.doc_id }}</span>
+          <span>chunk 数: {{ chunks.length }}</span>
+          <span>状态: {{ docStageLabel(chunksDoc) }}</span>
+          <span>
+            进度: {{ graphProgress(chunksDoc).completed_chunks }}/{{ graphProgress(chunksDoc).total_chunks }}
+          </span>
+        </div>
+        <div v-if="!chunks.length && !chunksLoading" class="chunks-panel__empty">当前文档还没有可展示的文本块</div>
+        <div v-else class="chunk-list">
+          <article v-for="chunk in chunks" :key="chunk.chunk_id" class="chunk-card">
+            <header class="chunk-card__head">
+              <div>
+                <div class="chunk-card__title">Chunk {{ chunk.index + 1 }}</div>
+                <div class="chunk-card__meta mono">{{ chunk.chunk_id }}</div>
+              </div>
+              <div class="chunk-card__status-wrap">
+                <span class="summary-pill" :class="`is-${chunkTone(chunk.status)}`">{{ chunkStatusLabel(chunk.status) }}</span>
+                <span v-if="chunk.updated_at" class="chunk-card__meta">{{ chunk.updated_at }}</span>
+              </div>
+            </header>
+            <div class="chunk-card__toolbar">
+              <div class="chunk-card__stats">
+                <span class="summary-pill is-info">实体 {{ chunkEntityCount(chunk) }}</span>
+                <span class="summary-pill is-info">关系 {{ chunkRelationCount(chunk) }}</span>
+                <span class="summary-pill" :class="chunk.parse_errors?.length ? 'is-warning' : 'is-success'">
+                  告警 {{ chunk.parse_errors?.length || 0 }}
+                </span>
+              </div>
+              <el-button
+                size="small"
+                type="warning"
+                plain
+                :loading="retryingChunkId === chunk.chunk_id"
+                @click="retryChunk(chunk)"
+              >
+                重试该块
+              </el-button>
+            </div>
+            <div v-if="chunk.error" class="chunk-card__error">{{ chunk.error }}</div>
+            <div class="chunk-card__section">
+              <div class="chunk-card__section-title">原始文本</div>
+              <pre class="chunk-card__text">{{ chunk.text }}</pre>
+            </div>
+            <div v-if="chunk.resolved_text" class="chunk-card__section">
+              <div class="chunk-card__section-title">块内指代消解结果</div>
+              <pre class="chunk-card__text">{{ chunk.resolved_text }}</pre>
+            </div>
+            <div v-if="chunk.entity_relation_raw" class="chunk-card__section">
+              <div class="chunk-card__section-title">抽取原始输出</div>
+              <pre class="chunk-card__text">{{ chunk.entity_relation_raw }}</pre>
+            </div>
+            <div class="chunk-card__split">
+              <div class="chunk-card__section">
+                <div class="chunk-card__section-title">解析出的实体</div>
+                <pre v-if="chunk.parsed_entities?.length" class="chunk-card__json">{{ prettyJson(chunk.parsed_entities) }}</pre>
+                <div v-else class="chunk-card__empty">当前块没有解析出实体</div>
+              </div>
+              <div class="chunk-card__section">
+                <div class="chunk-card__section-title">解析出的关系</div>
+                <pre v-if="chunk.parsed_relations?.length" class="chunk-card__json">{{ prettyJson(chunk.parsed_relations) }}</pre>
+                <div v-else class="chunk-card__empty">当前块没有解析出关系</div>
+              </div>
+            </div>
+            <div v-if="chunk.parse_errors?.length" class="chunk-card__section">
+              <div class="chunk-card__section-title">解析告警</div>
+              <ul class="chunk-card__errors">
+                <li v-for="(item, idx) in chunk.parse_errors" :key="`${chunk.chunk_id}-err-${idx}`">{{ item }}</li>
+              </ul>
+            </div>
+          </article>
+        </div>
+      </div>
+    </el-drawer>
   </div>
 </template>
 
@@ -221,6 +350,8 @@ const logsLoading = ref(false)
 const refreshing = ref(false)
 const saving = ref(false)
 const uploading = ref(false)
+const retryingDocId = ref('')
+const retryingChunkId = ref('')
 
 const docs = ref([])
 const tasks = ref([])
@@ -230,6 +361,10 @@ let timer = null
 
 const dlg = ref(false)
 const uploadDlg = ref(false)
+const chunksDrawer = ref(false)
+const chunksLoading = ref(false)
+const chunks = ref([])
+const chunksDoc = ref(null)
 
 const form = reactive({
   doc_id: '',
@@ -241,7 +376,6 @@ const form = reactive({
 const uploadForm = reactive({
   doc_id: '',
   doc_time: null,
-  standardize: true,
   file: null,
   filename: '',
 })
@@ -259,6 +393,12 @@ const logState = reactive({
   fallback_used: false,
 })
 
+const chunksTitle = computed(() => {
+  const row = chunksDoc.value
+  if (!row) return '文本块'
+  return `${row.doc_name || row.doc_id} · 文本块`
+})
+
 const taskMap = computed(() => {
   const out = {}
   for (const task of tasks.value) {
@@ -270,9 +410,9 @@ const taskMap = computed(() => {
 const runningTasks = computed(() => tasks.value.filter((x) => ['pending', 'running'].includes(x.status)).length)
 const failedTasks = computed(() => tasks.value.filter((x) => x.status === 'failed').length)
 const logEmptyText = computed(() => {
-  if (logQuery.task_id && !logState.fallback_used) return '当前 task_id 下没有匹配日志。'
-  if (logQuery.doc_id) return '当前 doc_id 下没有匹配日志。'
-  return '没有匹配到日志。'
+  if (logQuery.task_id && !logState.fallback_used) return '当前 task_id 下没有匹配日志'
+  if (logQuery.doc_id) return '当前 doc_id 下没有匹配日志'
+  return '没有匹配到日志'
 })
 
 function taskTone(status) {
@@ -284,6 +424,141 @@ function taskTone(status) {
 
 function taskLabel(task) {
   return `${task.status} · ${task.stage}`
+}
+
+function readDocStage(row) {
+  return String(row?.metadata?.ingest_stage || '').trim() || 'unknown'
+}
+
+function graphProgress(row) {
+  return row?.graph_progress || {
+    total_chunks: 0,
+    completed_chunks: 0,
+    failed_chunks: 0,
+    processing_chunks: 0,
+    pending_chunks: 0,
+    latest_stage: '',
+    latest_status: '',
+    pipeline: {},
+  }
+}
+
+function docStageLabel(row) {
+  const stage = readDocStage(row)
+  if (stage === 'base_completed') return '基础入库完成'
+  if (stage === 'graph_processing') return '图谱构建中'
+  if (stage === 'graph_completed') return '图谱构建完成'
+  if (stage === 'graph_failed') return '图谱构建失败'
+  if (stage === 'graph_retrying') return '图谱重试中'
+  return '状态未知'
+}
+
+function docStageTone(row) {
+  const stage = readDocStage(row)
+  if (stage === 'graph_completed') return 'success'
+  if (stage === 'graph_failed') return 'danger'
+  if (stage === 'graph_processing' || stage === 'graph_retrying') return 'warning'
+  return 'info'
+}
+
+function docStageHint(row) {
+  const stage = readDocStage(row)
+  if (stage === 'base_completed') return '基础检索可用'
+  if (stage === 'graph_processing') return '图谱任务正在运行'
+  if (stage === 'graph_completed') return '图检索已可用'
+  if (stage === 'graph_failed') return '已保留中间状态，可继续重试'
+  if (stage === 'graph_retrying') return '正在基于已有中间状态继续运行'
+  return '等待状态同步'
+}
+
+function canRetryGraph(row) {
+  const stage = readDocStage(row)
+  return stage === 'graph_failed' || stage === 'base_completed' || stage === 'graph_retrying'
+}
+
+function graphStageText(stage) {
+  if (stage === 'fusion') return '文档内融合'
+  if (stage === 'doc_graph_assets') return '文档级图资产'
+  if (stage === 'entity_alignment') return '实体对齐'
+  if (stage === 'relation_alignment') return '关系对齐'
+  if (stage === 'mentions') return 'Mention 生成'
+  if (stage === 'graph_index') return '图索引构建'
+  if (stage === 'save_graph_assets') return '图谱落库'
+  return '未开始'
+}
+
+function graphStageLabel(row) {
+  return graphStageText(graphProgress(row).latest_stage)
+}
+
+function graphStageHint(row) {
+  const progress = graphProgress(row)
+  if (!progress.latest_stage) return '暂无图谱阶段检查点'
+  const current = progress.pipeline?.[progress.latest_stage]
+  const alignmentFallbackCount = Number(progress.entity_alignment_fallback_count || 0)
+  if (alignmentFallbackCount > 0) {
+    return `${progress.latest_status || 'unknown'} · 实体对齐阶段有 ${alignmentFallbackCount} 次回退`
+  }
+  if (current?.error) return `${progress.latest_status} · ${current.error}`
+  return `${progress.latest_status || 'unknown'}`
+}
+
+function chunkTone(status) {
+  if (status === 'completed') return 'success'
+  if (status === 'failed') return 'danger'
+  if (status === 'processing') return 'warning'
+  return 'info'
+}
+
+function chunkStatusLabel(status) {
+  if (status === 'completed') return '已完成'
+  if (status === 'failed') return '失败'
+  if (status === 'processing') return '处理中'
+  return '待处理'
+}
+
+function chunkEntityCount(chunk) {
+  return Array.isArray(chunk?.parsed_entities) ? chunk.parsed_entities.length : 0
+}
+
+function chunkRelationCount(chunk) {
+  return Array.isArray(chunk?.parsed_relations) ? chunk.parsed_relations.length : 0
+}
+
+function prettyJson(value) {
+  try {
+    return JSON.stringify(value || [], null, 2)
+  } catch {
+    return String(value || '')
+  }
+}
+
+async function openChunks(row) {
+  chunksDoc.value = row
+  chunksDrawer.value = true
+  chunksLoading.value = true
+  chunks.value = []
+  try {
+    const res = await api.get(`/documents/${encodeURIComponent(row.doc_id)}/chunks`, {
+      params: { group_id: props.groupId, limit: 5000 },
+    })
+    chunks.value = Array.isArray(res.data) ? res.data : []
+  } finally {
+    chunksLoading.value = false
+  }
+}
+
+async function refreshChunks() {
+  if (!chunksDoc.value) return
+  chunksLoading.value = true
+  try {
+    const res = await api.get(`/documents/${encodeURIComponent(chunksDoc.value.doc_id)}/chunks`, {
+      params: { group_id: props.groupId, limit: 5000 },
+    })
+    chunks.value = Array.isArray(res.data) ? res.data : []
+  } finally {
+    chunksLoading.value = false
+  }
 }
 
 async function loadDocs() {
@@ -303,6 +578,10 @@ async function loadTasks() {
       params: { group_id: props.groupId, limit: 100 },
     })
     tasks.value = Array.isArray(res.data) ? res.data : []
+    if (selectedTaskId.value && !tasks.value.some((task) => task.task_id === selectedTaskId.value)) {
+      selectedTaskId.value = ''
+      if (logQuery.task_id) logQuery.task_id = ''
+    }
     if (!selectedTaskId.value && tasks.value.length) {
       selectTask(tasks.value[0], { silent: true })
     }
@@ -375,7 +654,6 @@ function openReingest(row) {
 function openUpload() {
   uploadForm.doc_id = ''
   uploadForm.doc_time = null
-  uploadForm.standardize = true
   uploadForm.file = null
   uploadForm.filename = ''
   uploadDlg.value = true
@@ -472,7 +750,6 @@ async function upload() {
       group_id: props.groupId,
       doc_time: docTimeIso,
       doc_id: String(uploadForm.doc_id || '').trim() || undefined,
-      standardize: Boolean(uploadForm.standardize),
     }
     const res = await api.post('/ingest/upload', fd, {
       params,
@@ -485,13 +762,72 @@ async function upload() {
   }
 }
 
+async function retryGraph(row) {
+  retryingDocId.value = row.doc_id
+  try {
+    const res = await api.post('/ingest/retry-graph', {
+      group_id: props.groupId,
+      doc_id: row.doc_id,
+    })
+    handleTaskAccepted(res.data, row.doc_id)
+  } finally {
+    retryingDocId.value = ''
+  }
+}
+
+async function retryChunk(chunk) {
+  if (!chunksDoc.value) return
+  retryingChunkId.value = chunk.chunk_id
+  try {
+    const res = await api.post(
+      `/documents/${encodeURIComponent(chunksDoc.value.doc_id)}/chunks/${encodeURIComponent(chunk.chunk_id)}/retry`,
+      null,
+      { params: { group_id: props.groupId } },
+    )
+    const rebuildTask = res.data?.graph_rebuild_task
+    if (rebuildTask?.task_id) {
+      ElMessage.success(`块重试成功，已自动触发图谱续跑：${rebuildTask.task_id}`)
+    } else {
+      ElMessage.success('块重试已完成')
+    }
+    await Promise.all([loadDocs(), loadTasks(), refreshChunks()])
+    await loadLogs()
+  } finally {
+    retryingChunkId.value = ''
+  }
+}
+
+async function deleteTask(task) {
+  await ElMessageBox.confirm(`确认删除任务 ${task.task_id} ？`, '删除确认', { type: 'warning' })
+  await api.delete(`/ingest-tasks/${encodeURIComponent(task.task_id)}`)
+  if (selectedTaskId.value === task.task_id) selectedTaskId.value = ''
+  if (logQuery.task_id === task.task_id) logQuery.task_id = ''
+  ElMessage.success('任务记录已删除')
+  await loadTasks()
+  await loadLogs()
+}
+
+async function clearFinishedTasks() {
+  await ElMessageBox.confirm('确认清理当前分组下已结束的任务记录？运行中的任务不会被清理。', '清理确认', { type: 'warning' })
+  const res = await api.post('/ingest-tasks/clear', {
+    group_id: props.groupId,
+    statuses: ['completed', 'failed'],
+  })
+  const deleted = Number(res.data?.deleted || 0)
+  ElMessage.success(`已清理 ${deleted} 条任务记录`)
+  if (selectedTaskId.value && !tasks.value.some((task) => task.task_id === selectedTaskId.value)) {
+    selectedTaskId.value = ''
+    logQuery.task_id = ''
+  }
+  await loadTasks()
+  await loadLogs()
+}
+
 async function remove(row) {
   await ElMessageBox.confirm(`确认删除 doc_id=${row.doc_id} ?`, '删除确认', { type: 'warning' })
   await api.delete(`/documents/${encodeURIComponent(row.doc_id)}`, { params: { group_id: props.groupId } })
   ElMessage.success('已删除')
-  if (logQuery.doc_id === row.doc_id) {
-    logQuery.doc_id = ''
-  }
+  if (logQuery.doc_id === row.doc_id) logQuery.doc_id = ''
   await refreshAll()
 }
 
@@ -663,6 +999,14 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+  box-shadow: 0 0 0 4px rgba(0, 0, 0, 0.04);
+}
+
 .task-pill__sub,
 .task-empty,
 .task-card__meta,
@@ -671,11 +1015,58 @@ onBeforeUnmount(() => {
   color: #768894;
 }
 
+.graph-progress {
+  display: grid;
+  gap: 8px;
+}
+
+.graph-progress__summary {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.graph-progress__pipeline {
+  display: grid;
+  gap: 4px;
+}
+
+.graph-progress__stage {
+  font-size: 13px;
+  font-weight: 700;
+  color: #183246;
+}
+
+.graph-progress__hint {
+  font-size: 12px;
+  color: #6f808c;
+  word-break: break-word;
+}
+
+.summary-pill,
+.task-card__status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .task-board {
   display: grid;
   gap: 10px;
   max-height: 560px;
   overflow: auto;
+}
+
+.task-board__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .task-board__empty {
@@ -713,19 +1104,6 @@ onBeforeUnmount(() => {
   gap: 10px;
 }
 
-.task-card__status {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 3px 10px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  background: #eef3f6;
-}
-
 .task-card__title {
   font-weight: 700;
   color: #102231;
@@ -735,6 +1113,11 @@ onBeforeUnmount(() => {
   font-size: 13px;
   color: #425966;
   line-height: 1.5;
+}
+
+.task-card__actions {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .log-toolbar {
@@ -794,9 +1177,166 @@ onBeforeUnmount(() => {
   color: #72838f;
 }
 
+.chunks-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.chunks-panel__meta {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: #6f808c;
+}
+
+.chunks-panel__empty {
+  padding: 24px;
+  border-radius: 16px;
+  background: #f4f7f9;
+  color: #738491;
+  text-align: center;
+}
+
+.chunk-list {
+  display: grid;
+  gap: 12px;
+  max-height: calc(100vh - 180px);
+  overflow: auto;
+  padding-right: 6px;
+}
+
+.chunk-card {
+  border: 1px solid #d9e4ea;
+  border-radius: 18px;
+  background: #ffffff;
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+}
+
+.chunk-card__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.chunk-card__status-wrap {
+  display: grid;
+  gap: 6px;
+  justify-items: end;
+}
+
+.chunk-card__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.chunk-card__stats {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.chunk-card__title {
+  font-weight: 700;
+  color: #102231;
+}
+
+.chunk-card__meta {
+  font-size: 12px;
+  color: #768894;
+}
+
+.chunk-card__text {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.65;
+  font-size: 13px;
+  color: #314754;
+  background: #f8fbfd;
+  border-radius: 14px;
+  padding: 12px;
+}
+
+.chunk-card__section {
+  display: grid;
+  gap: 8px;
+}
+
+.chunk-card__section-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #48606f;
+}
+
+.chunk-card__split {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.chunk-card__json {
+  margin: 0;
+  min-height: 64px;
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.6;
+  font-size: 12px;
+  color: #244050;
+  background: #f6fafc;
+  border: 1px solid #d8e4eb;
+  border-radius: 14px;
+  padding: 12px;
+}
+
+.chunk-card__empty {
+  padding: 12px;
+  border-radius: 12px;
+  background: #f7fafb;
+  color: #738491;
+  font-size: 12px;
+}
+
+.chunk-card__errors {
+  margin: 0;
+  padding-left: 18px;
+  color: #8f4a00;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.chunk-card__error {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #9c2323;
+  background: #fff1f1;
+  border: 1px solid #ffd7d7;
+  border-radius: 12px;
+  padding: 10px 12px;
+  word-break: break-word;
+}
+
+@media (max-width: 960px) {
+  .chunk-card__split {
+    grid-template-columns: 1fr;
+  }
+}
+
 .is-success {
   background: #d6f5df;
   color: #0f6a3b;
+}
+
+.status-dot.is-success {
+  background: #1f9d55;
 }
 
 .is-warning {
@@ -804,14 +1344,26 @@ onBeforeUnmount(() => {
   color: #8a5a00;
 }
 
+.status-dot.is-warning {
+  background: #d99100;
+}
+
 .is-danger {
   background: #ffd7d7;
   color: #9c2323;
 }
 
+.status-dot.is-danger {
+  background: #cc3d3d;
+}
+
 .is-info {
   background: #dbeaf4;
   color: #31556f;
+}
+
+.status-dot.is-info {
+  background: #5d7f95;
 }
 
 @media (max-width: 1100px) {

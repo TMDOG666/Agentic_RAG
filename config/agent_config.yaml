@@ -35,7 +35,7 @@ providers:
   # - 如需国际区，可改为 https://api.minimax.io/v1
   # --------------------------------------------------------------------------
   minimax:
-    model: MiniMax-M2.5
+    model: MiniMax-M2.7
     base_url: https://api.minimaxi.com/v1
     api_key_env: MINIMAX_API_KEY
     temperature: 0

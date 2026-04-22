@@ -4,6 +4,8 @@ from typing import Protocol, Sequence
 
 from .types import (
     ChunkEmbeddingRecord,
+    GraphChunkCheckpointRecord,
+    GraphPipelineCheckpointRecord,
     ChunkRecord,
     DocumentRecord,
     EntityMentionRecord,
@@ -20,6 +22,37 @@ from .types import (
 
 
 class GraphStorage(Protocol):
+    def list_doc_chunks(
+        self,
+        *,
+        group_id: str,
+        doc_id: str,
+        limit: int = 200000,
+    ) -> Sequence[ChunkRecord]:
+        ...
+
+    def upsert_graph_chunk_checkpoint(self, *, checkpoint: GraphChunkCheckpointRecord) -> None:
+        ...
+
+    def list_graph_chunk_checkpoints(
+        self,
+        *,
+        group_id: str,
+        doc_id: str,
+    ) -> Sequence[GraphChunkCheckpointRecord]:
+        ...
+
+    def upsert_graph_pipeline_checkpoint(self, *, checkpoint: GraphPipelineCheckpointRecord) -> None:
+        ...
+
+    def list_graph_pipeline_checkpoints(
+        self,
+        *,
+        group_id: str,
+        doc_id: str,
+    ) -> Sequence[GraphPipelineCheckpointRecord]:
+        ...
+
     def list_group_global_entities(self, *, group_id: str, limit: int = 500) -> Sequence[GlobalEntityRecord]:
         ...
 

@@ -35,3 +35,8 @@ class IngestOut(BaseModel):
     task_id: Optional[str] = None
     task_status: Optional[str] = None
     task_stage: Optional[str] = None
+
+
+class IngestRetryIn(BaseModel):
+    group_id: str
+    doc_id: str
