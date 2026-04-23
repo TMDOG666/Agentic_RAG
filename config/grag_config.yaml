@@ -15,7 +15,7 @@
 # ============================================================================
 
 # 默认使用的 LLM 提供商（必须存在于 llm_providers 下）
-llm_provider: miniMax
+llm_provider: minimax
 
 # 默认使用的向量嵌入模型提供商（必须存在于 embedding_providers 下）
 embedding_provider: vllm

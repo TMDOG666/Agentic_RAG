@@ -54,6 +54,11 @@ class GraphChunkDetailRecord:
     resolved_text: str
     entity_relation_raw: str
     parsed_json: Dict[str, Any]
+    latest_task_id: str = ""
+    latest_task_status: str = ""
+    latest_task_kind: str = ""
+    latest_task_updated_at: str = ""
+    latest_task_message: str = ""
 
 
 @dataclass(frozen=True)
@@ -188,6 +193,10 @@ class IngestTaskRecord:
     message: str
     created_at: str
     updated_at: str
+    trace_id: str = ""
+    retry_count: int = 0
+    cancel_requested: bool = False
+    metadata: Dict[str, Any] = None
 
 
 @dataclass(frozen=True)

@@ -4,14 +4,14 @@ from typing import Any
 
 from grag.config import get_config_manager
 from grag.data_client import get_data_manager
-from grag.graph_construction.graph_builder import GraphBuilder
 from grag.model.embedding_client import EmbeddingClient
 from grag.storage.repositories.milvus_graph_index_repository import MilvusGraphIndexRepository
 from grag.storage.repositories.milvus_repository import MilvusVectorRepository
 from grag.storage.repositories.neo4j_repository import Neo4jGraphRepository
 from grag.storage.repositories.postgres_repository import PostgresGraphRepository
-from grag.storage.storage_impl import DataClientGraphStorage
 from grag.storage.types import DocumentRecord, GraphChunkDetailRecord, GraphIndexRecord
+
+from .ingest_tasks_service import IngestTasksService
 
 
 class DocumentsService:
@@ -36,6 +36,7 @@ class DocumentsService:
             upsert_strategy="delete_then_insert",
         )
         self._embedding = EmbeddingClient(provider_name=None)
+        self._tasks = IngestTasksService()
 
     def list_documents(self, *, group_id: str, limit: int = 200) -> list[DocumentRecord]:
         return list(self._pg.list_group_documents(group_id=group_id, limit=int(limit)) or [])
@@ -55,8 +56,13 @@ class DocumentsService:
     def list_doc_chunks_with_progress(self, *, group_id: str, doc_id: str) -> list[GraphChunkDetailRecord]:
         chunks = self.list_doc_chunks(group_id=group_id, doc_id=doc_id)
         checkpoint_map = self._get_chunk_checkpoint_map(group_id=group_id, doc_id=doc_id)
+        task_map = self._get_chunk_task_map(group_id=group_id, doc_id=doc_id)
         return [
-            self._build_chunk_detail(chunk=chunk, checkpoint=checkpoint_map.get(chunk.chunk_id))
+            self._build_chunk_detail(
+                chunk=chunk,
+                checkpoint=checkpoint_map.get(chunk.chunk_id),
+                task=task_map.get(chunk.chunk_id),
+            )
             for chunk in chunks
         ]
 
@@ -134,8 +140,9 @@ class DocumentsService:
         if document is None:
             raise ValueError(f"文档不存在: group_id={group_id}, doc_id={doc_id}")
 
-        builder = GraphBuilder(storage=DataClientGraphStorage(milvus_upsert_strategy="delete_then_insert"))
-        parsed_chunk = builder.retry_single_chunk(
+        from grag.graph_construction.async_graph_service import AsyncGraphBuildService
+
+        task = AsyncGraphBuildService.instance().submit_chunk_retry(
             group_id=group_id,
             doc_id=doc_id,
             chunk_id=chunk_id,
@@ -143,44 +150,43 @@ class DocumentsService:
             doc_time=document.doc_time,
         )
         chunk_detail = self.get_doc_chunk_detail(group_id=group_id, doc_id=doc_id, chunk_id=chunk_id)
-        if chunk_detail is None:
-            raise RuntimeError(f"chunk checkpoint not found after retry: {chunk_id}")
-
         progress = self.get_document_graph_progress(group_id=group_id, doc_id=doc_id)
-        graph_rebuild_task = None
-
-        if self._all_chunks_completed(progress):
-            graph_rebuild_task = self._submit_graph_rebuild(
-                group_id=group_id,
-                doc_id=doc_id,
-                doc_name=document.doc_name,
-                doc_time=document.doc_time,
-            )
-            progress = self.get_document_graph_progress(group_id=group_id, doc_id=doc_id)
-        else:
-            ingest_stage = "graph_failed" if str(parsed_chunk.error or "").strip() else "base_completed"
-            self.update_document_stage(
-                group_id=group_id,
-                doc_id=doc_id,
-                ingest_stage=ingest_stage,
-                extra_metadata={
-                    "graph_retry_target_chunk": chunk_id,
-                    "graph_retry_chunk_status": chunk_detail.status,
-                },
-            )
+        self.update_document_stage(
+            group_id=group_id,
+            doc_id=doc_id,
+            ingest_stage="graph_retrying",
+            extra_metadata={
+                "graph_retry_target_chunk": chunk_id,
+                "graph_retry_chunk_task_id": task.task_id,
+                "graph_retry_chunk_status": chunk_detail.status if chunk_detail is not None else "processing",
+            },
+        )
 
         return {
             "chunk": chunk_detail,
+            "task": task,
             "graph_progress": progress,
-            "graph_rebuild_task": graph_rebuild_task,
         }
 
     def _get_chunk_checkpoint_map(self, *, group_id: str, doc_id: str) -> dict[str, Any]:
         checkpoints = list(self._pg.list_graph_chunk_checkpoints(group_id=group_id, doc_id=doc_id) or [])
         return {row.chunk_id: row for row in checkpoints}
 
+    def _get_chunk_task_map(self, *, group_id: str, doc_id: str) -> dict[str, Any]:
+        tasks = self._tasks.list_tasks(group_id=group_id, doc_id=doc_id, limit=1000)
+        out: dict[str, Any] = {}
+        for task in tasks:
+            metadata = dict(task.metadata or {})
+            if str(metadata.get("task_kind") or "") != "chunk_retry":
+                continue
+            target_chunk_id = str(metadata.get("target_chunk_id") or "").strip()
+            if not target_chunk_id or target_chunk_id in out:
+                continue
+            out[target_chunk_id] = task
+        return out
+
     @staticmethod
-    def _build_chunk_detail(*, chunk, checkpoint) -> GraphChunkDetailRecord:
+    def _build_chunk_detail(*, chunk, checkpoint, task=None) -> GraphChunkDetailRecord:
         parsed_json = dict((checkpoint.parsed_json if checkpoint else {}) or {})
         return GraphChunkDetailRecord(
             chunk=chunk,
@@ -190,6 +196,11 @@ class DocumentsService:
             resolved_text=checkpoint.resolved_text if checkpoint else "",
             entity_relation_raw=checkpoint.entity_relation_raw if checkpoint else "",
             parsed_json=parsed_json,
+            latest_task_id=str(getattr(task, "task_id", "") or ""),
+            latest_task_status=str(getattr(task, "status", "") or ""),
+            latest_task_kind=str((getattr(task, "metadata", {}) or {}).get("task_kind") or ""),
+            latest_task_updated_at=str(getattr(task, "updated_at", "") or ""),
+            latest_task_message=str(getattr(task, "message", "") or ""),
         )
 
     @staticmethod
@@ -242,12 +253,14 @@ class DocumentsService:
             ingest_stage="graph_retrying",
             extra_metadata={"graph_rebuild_trigger": "chunk_retry"},
         )
-        task = AsyncGraphBuildService.instance().submit(
+        task = AsyncGraphBuildService.instance().resume_document_task(
             text=self.get_document_text(group_id=group_id, doc_id=doc_id),
             group_id=group_id,
             doc_id=doc_id,
             doc_name=doc_name,
             doc_time=doc_time,
+            reason="chunk_retry_resume",
+            metadata_patch={"retry_trigger": "documents.retry_chunk"},
         )
         return {"task_id": task.task_id, "status": task.status, "stage": task.stage}
 

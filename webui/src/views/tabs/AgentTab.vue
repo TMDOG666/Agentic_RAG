@@ -240,6 +240,12 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import MarkdownIt from 'markdown-it'
 import { api, postEventStream } from '../../lib/api'
+import {
+  normalizeTraceStatus as normalizeTraceStatusDto,
+  normalizeTraceStep as normalizeTraceStepDto,
+  normalizeTraceUsage as normalizeTraceUsageDto,
+  sortTraceSteps,
+} from '../../lib/trace'
 import { createEphemeralSession, deleteSession, listSessions, upsertSession } from '../../modules/agent-chat-history'
 
 const props = defineProps({
@@ -307,11 +313,7 @@ const runStatusType = computed(() => taskStatusType(currentRun.value.status))
 
 const timelineSteps = computed(() => {
   if (currentRun.value.traceSteps.length) {
-    return [...currentRun.value.traceSteps].sort((a, b) => {
-      const timeA = new Date(a.updated_at || 0).getTime()
-      const timeB = new Date(b.updated_at || 0).getTime()
-      return timeA - timeB
-    })
+    return sortTraceSteps(currentRun.value.traceSteps)
   }
   return synthesizeTimelineFromRun(currentRun.value)
 })
@@ -364,40 +366,18 @@ function createUsage(patch = {}) {
 }
 
 function normalizeUsage(payload = {}) {
-  return createUsage({
-    inputTokens: Number(payload.input_tokens ?? payload.inputTokens ?? 0) || 0,
-    outputTokens: Number(payload.output_tokens ?? payload.outputTokens ?? 0) || 0,
-    totalTokens: Number(payload.total_tokens ?? payload.totalTokens ?? 0) || 0,
-    isEstimated: Boolean(payload.is_estimated ?? payload.isEstimated),
-    latencyMs: Number(payload.latency_ms ?? payload.latencyMs ?? 0) || 0,
-  })
+  return createUsage(normalizeTraceUsageDto(payload))
 }
 
 function normalizeTraceStatus(status) {
-  const value = String(status || '').trim().toLowerCase()
-  if (!value) return 'pending'
-  if (['done', 'completed', 'success', 'succeeded'].includes(value)) return 'completed'
-  if (['error', 'failed'].includes(value)) return 'failed'
-  if (['running', 'processing', 'active', 'in_progress'].includes(value)) return 'running'
-  return value
+  return normalizeTraceStatusDto(status)
 }
 
 function normalizeTraceStep(step = {}) {
-  const payload = step?.payload && typeof step.payload === 'object' ? step.payload : {}
   return {
-    ...step,
-    step_id: step.step_id || `${Date.now()}-${Math.random().toString(16).slice(2, 6)}`,
+    ...normalizeTraceStepDto(step),
     source: step.source || 'agent',
-    kind: step.kind || 'system',
-    event: step.event || 'trace',
-    step_name: step.step_name || step.title || step.event || 'trace',
-    title: step.title || step.step_name || step.event || 'trace',
-    status: normalizeTraceStatus(step.status),
-    updated_at: step.updated_at || step.ended_at || step.started_at || new Date().toISOString(),
-    latency_ms: Number(step.latency_ms || 0) || 0,
     tokens: normalizeUsage(step.tokens || {}),
-    error: step.error || null,
-    payload,
   }
 }
 

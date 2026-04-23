@@ -21,6 +21,7 @@
 """
 
 
+import re
 from dataclasses import dataclass
 from typing import List, Optional
  
@@ -29,6 +30,22 @@ from grag.monitoring.monitoring_manager import get_current_monitor
 
 SEP_TOKEN = "<|SEP|>"
 DONE_TOKEN = "<|DONE|>"
+
+
+def _normalize_separator_tokens(text: str) -> str:
+    """兼容模型偶发生成的坏分隔符，减少解析阶段的格式敏感性。"""
+    normalized = text or ""
+    separator_variants = [
+        r"<\|SEP\?>",
+        r"<\|SEP\uff1f>",
+        r"<\|SEP\uff5c>",
+        r"<\|SEP[|!1Il\uff5c\u4e28]>",
+        r"<\|SEP\s*\|?\s*>",
+    ]
+    for pattern in separator_variants:
+        normalized = re.sub(pattern, SEP_TOKEN, normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"<\|\s*DONE\s*\|?\s*>", DONE_TOKEN, normalized, flags=re.IGNORECASE)
+    return normalized
 
 
 @dataclass(frozen=True)
@@ -86,7 +103,7 @@ def parse_entity_relation_raw(raw: str) -> ParsedEntityRelation:
     relations: List[ParsedRelation] = []
     errors: List[str] = []
 
-    text = (raw or "").strip()
+    text = _normalize_separator_tokens((raw or "").strip())
     if not text:
         monitor = get_current_monitor()
         if monitor is not None:

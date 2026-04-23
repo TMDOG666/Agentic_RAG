@@ -181,12 +181,14 @@ class IngestService:
             doc_id=payload.doc_id,
             ingest_stage="graph_retrying",
         )
-        task = self._submit_graph_build(
+        task = self._async_graph.resume_document_task(
             text=text,
             group_id=payload.group_id,
             doc_id=payload.doc_id,
             doc_name=document.doc_name,
             doc_time=document.doc_time,
+            reason="document_retry",
+            metadata_patch={"retry_trigger": "ingest.retry_graph"},
         )
         return self._build_retry_out(
             group_id=payload.group_id,

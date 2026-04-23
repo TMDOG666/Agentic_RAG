@@ -22,6 +22,11 @@ class ChunkOut(BaseModel):
     parsed_relations: list[dict] = []
     parse_errors: list[str] = []
     trace_step: TraceStepOut | None = None
+    task_id: str = ""
+    task_status: str = ""
+    task_kind: str = ""
+    task_updated_at: str = ""
+    task_message: str = ""
 
     @staticmethod
     def from_chunk_record(
@@ -36,6 +41,11 @@ class ChunkOut(BaseModel):
         parsed_relations: list[dict] | None = None,
         parse_errors: list[str] | None = None,
         trace_step: TraceStepOut | None = None,
+        task_id: str = "",
+        task_status: str = "",
+        task_kind: str = "",
+        task_updated_at: str = "",
+        task_message: str = "",
     ) -> "ChunkOut":
         return ChunkOut(
             group_id=str(chunk.group_id),
@@ -53,4 +63,9 @@ class ChunkOut(BaseModel):
             parsed_relations=list(parsed_relations or []),
             parse_errors=[str(item) for item in (parse_errors or [])],
             trace_step=trace_step,
+            task_id=str(task_id or ""),
+            task_status=str(task_status or ""),
+            task_kind=str(task_kind or ""),
+            task_updated_at=str(task_updated_at or ""),
+            task_message=str(task_message or ""),
         )

@@ -223,11 +223,29 @@ class EntityRelationExtractor:
         raise RuntimeError(str(last_exc) if last_exc else "LLM call failed")
 
     @staticmethod
+    def _normalize_separator_tokens(text: str) -> str:
+        """归一化模型偶发生成的坏分隔符，避免轻微变形导致解析失败。"""
+        normalized = text or ""
+        separator_variants = [
+            r"<\|SEP\?>",
+            r"<\|SEP\uff1f>",
+            r"<\|SEP\uff5c>",
+            r"<\|SEP[|!1Il\uff5c\u4e28]>",
+            r"<\|SEP\s*\|?\s*>",
+        ]
+        for pattern in separator_variants:
+            normalized = re.sub(pattern, "<|SEP|>", normalized, flags=re.IGNORECASE)
+        normalized = re.sub(r"<\|\s*DONE\s*\|?\s*>", "<|DONE|>", normalized, flags=re.IGNORECASE)
+        return normalized
+
+    @staticmethod
     def _sanitize_llm_output(raw: str) -> str:
         """清洗抽取模型输出，尽量保留 entity/relation 主体内容。"""
         text = (raw or "").replace("\r\n", "\n").strip()
         if not text:
             return ""
+
+        text = EntityRelationExtractor._normalize_separator_tokens(text)
 
         text = re.sub(r"<think>.*?</think>", "", text, flags=re.IGNORECASE | re.DOTALL)
         text = re.sub(r"```(?:text|json|markdown)?", "", text, flags=re.IGNORECASE)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from typing import Optional, Sequence
 
@@ -228,6 +229,10 @@ class PostgresGraphRepository:
                 message TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
+                trace_id TEXT NOT NULL DEFAULT '',
+                retry_count INTEGER NOT NULL DEFAULT 0,
+                cancel_requested BOOLEAN NOT NULL DEFAULT FALSE,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
                 PRIMARY KEY (task_id)
             );
             """,
@@ -311,6 +316,16 @@ class PostgresGraphRepository:
                         )
                     except Exception:
                         pass
+                    for column_sql in (
+                        "ALTER TABLE grag_ingest_tasks ADD COLUMN trace_id TEXT NOT NULL DEFAULT ''",
+                        "ALTER TABLE grag_ingest_tasks ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0",
+                        "ALTER TABLE grag_ingest_tasks ADD COLUMN cancel_requested BOOLEAN NOT NULL DEFAULT FALSE",
+                        "ALTER TABLE grag_ingest_tasks ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'",
+                    ):
+                        try:
+                            cur.execute(column_sql)
+                        except Exception:
+                            pass
         finally:
             conn.close()
 
@@ -1780,15 +1795,20 @@ class PostgresGraphRepository:
                         """
                         INSERT INTO grag_ingest_tasks (
                             task_id, group_id, doc_id, doc_name, doc_time,
-                            status, stage, message, created_at, updated_at
+                            status, stage, message, created_at, updated_at,
+                            trace_id, retry_count, cancel_requested, metadata_json
                         )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (task_id)
                         DO UPDATE SET
                             status = EXCLUDED.status,
                             stage = EXCLUDED.stage,
                             message = EXCLUDED.message,
-                            updated_at = EXCLUDED.updated_at;
+                            updated_at = EXCLUDED.updated_at,
+                            trace_id = EXCLUDED.trace_id,
+                            retry_count = EXCLUDED.retry_count,
+                            cancel_requested = EXCLUDED.cancel_requested,
+                            metadata_json = EXCLUDED.metadata_json;
                         """,
                         (
                             task.task_id,
@@ -1801,6 +1821,10 @@ class PostgresGraphRepository:
                             task.message,
                             task.created_at,
                             task.updated_at,
+                            str(task.trace_id or ""),
+                            int(task.retry_count or 0),
+                            bool(task.cancel_requested),
+                            json.dumps(task.metadata or {}, ensure_ascii=False),
                         ),
                     )
         finally:
@@ -1817,7 +1841,8 @@ class PostgresGraphRepository:
                     cur.execute(
                         """
                         SELECT task_id, group_id, doc_id, doc_name, doc_time,
-                               status, stage, message, created_at, updated_at
+                               status, stage, message, created_at, updated_at,
+                               trace_id, retry_count, cancel_requested, metadata_json
                         FROM grag_ingest_tasks
                         WHERE task_id = %s
                         LIMIT 1;
@@ -1838,6 +1863,10 @@ class PostgresGraphRepository:
                 message=str(row[7]),
                 created_at=str(row[8]),
                 updated_at=str(row[9]),
+                trace_id=str(row[10] or ""),
+                retry_count=int(row[11] or 0),
+                cancel_requested=bool(row[12]),
+                metadata=json.loads(str(row[13] or "{}")),
             )
         finally:
             conn.close()
@@ -1860,7 +1889,8 @@ class PostgresGraphRepository:
             params.append(str(doc_id))
         sql = (
             "SELECT task_id, group_id, doc_id, doc_name, doc_time, "
-            "status, stage, message, created_at, updated_at "
+            "status, stage, message, created_at, updated_at, "
+            "trace_id, retry_count, cancel_requested, metadata_json "
             "FROM grag_ingest_tasks "
             + (f"WHERE {' AND '.join(where)} " if where else "")
             + "ORDER BY updated_at DESC, created_at DESC "
@@ -1885,6 +1915,10 @@ class PostgresGraphRepository:
                     message=str(row[7]),
                     created_at=str(row[8]),
                     updated_at=str(row[9]),
+                    trace_id=str(row[10] or ""),
+                    retry_count=int(row[11] or 0),
+                    cancel_requested=bool(row[12]),
+                    metadata=json.loads(str(row[13] or "{}")),
                 )
                 for row in rows
             ]
@@ -1900,9 +1934,10 @@ class PostgresGraphRepository:
                     cur.execute(
                         """
                         SELECT task_id, group_id, doc_id, doc_name, doc_time,
-                               status, stage, message, created_at, updated_at
+                               status, stage, message, created_at, updated_at,
+                               trace_id, retry_count, cancel_requested, metadata_json
                         FROM grag_ingest_tasks
-                        WHERE status IN ('pending', 'running')
+                        WHERE status IN ('pending', 'running', 'recovering')
                         ORDER BY updated_at ASC, created_at ASC
                         LIMIT %s;
                         """,
@@ -1921,6 +1956,10 @@ class PostgresGraphRepository:
                     message=str(row[7]),
                     created_at=str(row[8]),
                     updated_at=str(row[9]),
+                    trace_id=str(row[10] or ""),
+                    retry_count=int(row[11] or 0),
+                    cancel_requested=bool(row[12]),
+                    metadata=json.loads(str(row[13] or "{}")),
                 )
                 for row in rows
             ]

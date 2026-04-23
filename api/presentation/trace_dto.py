@@ -125,6 +125,10 @@ def map_agent_event_to_dto(event: dict[str, Any], *, trace_id: str = "") -> Trac
     payload = dict(event or {})
     payload.pop("type", None)
     status = _infer_status(raw_event, payload)
+    timestamp = str(payload.get("timestamp") or payload.get("updated_at") or "")
+    started_at = str(payload.get("started_at") or timestamp)
+    updated_at = str(payload.get("updated_at") or timestamp or started_at)
+    ended_at = str(payload.get("ended_at") or (updated_at if status in {"completed", "failed"} else ""))
     error = build_error(
         error_type=str(payload.get("error_type") or ""),
         message=str(payload.get("error") or ""),
@@ -146,9 +150,9 @@ def map_agent_event_to_dto(event: dict[str, Any], *, trace_id: str = "") -> Trac
         ),
         title=_infer_title(raw_event, payload),
         status=status,
-        started_at=str(payload.get("started_at") or ""),
-        ended_at=str(payload.get("ended_at") or ""),
-        updated_at=str(payload.get("updated_at") or ""),
+        started_at=started_at,
+        ended_at=ended_at,
+        updated_at=updated_at,
         latency_ms=float(payload["latency_ms"]) if payload.get("latency_ms") is not None else None,
         tokens=tokens,
         error=error,
@@ -165,6 +169,9 @@ def map_agent_event_to_dto(event: dict[str, Any], *, trace_id: str = "") -> Trac
 def map_pipeline_checkpoint_to_step(stage: str, checkpoint: dict[str, Any], *, trace_id: str = "") -> TraceStepOut:
     payload = dict((checkpoint or {}).get("payload") or {})
     status = normalize_status(checkpoint.get("status"))
+    updated_at = str(checkpoint.get("updated_at") or payload.get("updated_at") or "")
+    started_at = str(payload.get("started_at") or updated_at)
+    ended_at = updated_at if status in {"completed", "failed"} else ""
     error = build_error(
         message=str(checkpoint.get("error") or ""),
         detail=payload if str(checkpoint.get("error") or "").strip() else {},
@@ -178,7 +185,9 @@ def map_pipeline_checkpoint_to_step(stage: str, checkpoint: dict[str, Any], *, t
         step_name=str(stage),
         title=str(stage),
         status=status,
-        updated_at=str(checkpoint.get("updated_at") or ""),
+        started_at=started_at,
+        ended_at=ended_at,
+        updated_at=updated_at,
         latency_ms=float(payload["latency_ms"]) if payload.get("latency_ms") is not None else None,
         tokens=build_token_usage(payload),
         error=error,
@@ -187,6 +196,8 @@ def map_pipeline_checkpoint_to_step(stage: str, checkpoint: dict[str, Any], *, t
 
 
 def map_chunk_checkpoint_to_step(chunk: Any, *, trace_id: str = "") -> TraceStepOut:
+    status = normalize_status(getattr(chunk, "status", ""))
+    updated_at = str(getattr(chunk, "updated_at", "") or "")
     payload = {
         "chunk_id": str(chunk.chunk_id),
         "chunk_index": int(chunk.index),
@@ -204,8 +215,10 @@ def map_chunk_checkpoint_to_step(chunk: Any, *, trace_id: str = "") -> TraceStep
         event="ingest.chunk",
         step_name=f"chunk_{int(chunk.index)}",
         title=f"Chunk {int(chunk.index)}",
-        status=normalize_status(getattr(chunk, "status", "")),
-        updated_at=str(getattr(chunk, "updated_at", "") or ""),
+        status=status,
+        started_at=updated_at,
+        ended_at=updated_at if status in {"completed", "failed"} else "",
+        updated_at=updated_at,
         error=build_error(message=str(getattr(chunk, "error", "") or ""), detail=payload),
         payload=payload,
     )

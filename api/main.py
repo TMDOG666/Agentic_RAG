@@ -8,9 +8,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from agent.skill.manager import SkillManager
-from agent.llm.config import load_agent_config
+from agent.llm.config import build_agent_runtime_snapshot
 from api.controllers.router import api_router
-from grag.config import ProviderType, get_config_manager
+from grag.config import get_config_manager
 from grag.graph_construction.async_graph_service import AsyncGraphBuildService
 
 
@@ -49,41 +49,23 @@ def create_app() -> FastAPI:
         SkillManager()
         async_graph = AsyncGraphBuildService.instance()
         try:
-            agent_config = load_agent_config(_resolve_agent_config_path())
-            agent_provider_name = str(
-                os.environ.get("AGENT_PROVIDER") or agent_config.get("provider") or ""
-            ).strip()
-            agent_provider_config = (agent_config.get("providers") or {}).get(agent_provider_name) or {}
-            agent_model = str(
-                os.environ.get("AGENT_MODEL") or agent_provider_config.get("model") or ""
-            ).strip()
+            snapshot = build_agent_runtime_snapshot(_resolve_agent_config_path())
             logger.info(
-                "Agent provider: %s%s",
-                agent_provider_name or "unknown",
-                f" (model={agent_model})" if agent_model else "",
+                "Agent runtime config: provider=%s model=%s base_url=%s api_key=%s api_key_source=%s source=%s",
+                snapshot.get("provider_name") or "unknown",
+                snapshot.get("model") or "unknown",
+                snapshot.get("base_url") or "-",
+                "yes" if snapshot.get("api_key_present") else "no",
+                snapshot.get("api_key_source") or "-",
+                snapshot.get("config_source") or "config",
             )
         except Exception as exc:
             logger.warning("Failed to read agent provider on startup: %s: %s", type(exc).__name__, exc)
 
         try:
             cm = get_config_manager()
-            settings = cm.get_settings()
-            ingest_llm_provider_name = str(settings.llm_provider or "").strip()
-            ingest_llm_provider_config = cm.get_provider_config(ProviderType.LLM, ingest_llm_provider_name)
-            ingest_llm_model = str(getattr(ingest_llm_provider_config, "model", "") or "").strip()
-            ingest_stage_providers = settings.resolve_graph_construction_llm_providers()
-            logger.info(
-                "Ingest LLM provider: %s%s",
-                ingest_llm_provider_name or "unknown",
-                f" (model={ingest_llm_model})" if ingest_llm_model else "",
-            )
-            logger.info(
-                "Ingest stage LLM providers: coref=%s, extraction=%s, fusion=%s, entity_alignment=%s",
-                ingest_stage_providers.get("coreference_resolution", "unknown"),
-                ingest_stage_providers.get("entity_relation_extraction", "unknown"),
-                ingest_stage_providers.get("fusion", "unknown"),
-                ingest_stage_providers.get("entity_alignment", "unknown"),
-            )
+            for line in cm.format_runtime_snapshot_lines():
+                logger.info("GRAG runtime config: %s", line)
         except Exception as exc:
             logger.warning("Failed to read ingest LLM provider on startup: %s: %s", type(exc).__name__, exc)
 

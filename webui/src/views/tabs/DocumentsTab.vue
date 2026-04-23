@@ -160,16 +160,81 @@
             <div class="task-card__message">{{ task.message }}</div>
             <div class="task-card__actions">
               <el-button
+                v-if="canResumeTask(task)"
+                size="small"
+                text
+                type="primary"
+                @click.stop="resumeTask(task)"
+              >
+                续跑
+              </el-button>
+              <el-button
+                v-if="canCancelTask(task)"
+                size="small"
+                text
+                type="warning"
+                @click.stop="cancelTask(task)"
+              >
+                取消
+              </el-button>
+              <el-button
                 size="small"
                 text
                 type="danger"
-                :disabled="['pending', 'running'].includes(task.status)"
+                :disabled="['pending', 'running', 'recovering'].includes(task.status)"
                 @click.stop="deleteTask(task)"
               >
                 删除任务
               </el-button>
             </div>
           </button>
+        </div>
+
+        <div class="task-trace-panel" v-loading="taskTraceLoading">
+          <div class="task-trace-panel__head">
+            <div>
+              <div class="panel__title">任务 Trace</div>
+              <div class="panel__sub">统一展示任务状态、checkpoint 和文档级图谱进度</div>
+            </div>
+            <el-tag v-if="selectedTask" :type="taskTone(selectedTask.status)" effect="light" round>
+              {{ taskStatusLabel(selectedTask.status) }}
+            </el-tag>
+          </div>
+
+          <div v-if="!selectedTask" class="task-board__empty">选择一个任务后，这里会显示统一 trace 时间线。</div>
+          <template v-else>
+            <div class="task-trace-panel__summary">
+              <div class="summary-pill is-info">task_id {{ selectedTask.task_id }}</div>
+              <div class="summary-pill is-info">stage {{ selectedTask.stage }}</div>
+              <div v-if="selectedTask.retry_count" class="summary-pill is-warning">重试 {{ selectedTask.retry_count }}</div>
+              <div v-if="selectedTask.metadata?.recovered" class="summary-pill is-warning">重启恢复</div>
+              <div v-if="selectedTask.cancel_requested" class="summary-pill is-danger">已请求取消</div>
+            </div>
+
+            <div v-if="!selectedTaskTimeline.length" class="task-board__empty">当前任务还没有可展示的 trace step。</div>
+            <div v-else class="task-trace-list">
+              <article
+                v-for="step in selectedTaskTimeline"
+                :key="step.step_id"
+                class="task-trace-card"
+                :class="`is-${taskTone(step.status)}`"
+              >
+                <div class="task-trace-card__head">
+                  <div>
+                    <div class="task-trace-card__title">{{ step.title || step.step_name }}</div>
+                    <div class="task-trace-card__meta">
+                      <span>{{ step.kind }}</span>
+                      <span v-if="step.updated_at">{{ step.updated_at }}</span>
+                      <span v-if="step.latency_ms">耗时 {{ Math.round(step.latency_ms) }} ms</span>
+                    </div>
+                  </div>
+                  <span class="summary-pill" :class="`is-${taskTone(step.status)}`">{{ taskStatusLabel(step.status) }}</span>
+                </div>
+                <div v-if="step.payload?.message" class="task-trace-card__desc">{{ step.payload.message }}</div>
+                <div v-if="step.error?.message" class="task-trace-card__error">{{ step.error.message }}</div>
+              </article>
+            </div>
+          </template>
         </div>
       </el-card>
     </section>
@@ -343,6 +408,13 @@
                   告警 {{ chunk.parse_errors?.length || 0 }}
                 </span>
                 <span v-if="chunkHasIssue(chunk)" class="summary-pill is-danger">问题块</span>
+                <span
+                  v-if="chunk.task_id"
+                  class="summary-pill"
+                  :class="`is-${taskTone(chunk.task_status || 'pending')}`"
+                >
+                  task {{ taskStatusLabel(chunk.task_status || 'pending') }}
+                </span>
               </div>
               <el-button
                 size="small"
@@ -355,6 +427,19 @@
               </el-button>
             </div>
             <div v-if="chunk.error" class="chunk-card__error">{{ chunk.error }}</div>
+            <div v-if="chunk.task_id" class="chunk-task">
+              <div class="chunk-trace__head">
+                <span class="chunk-trace__title">async task</span>
+                <el-button size="small" text type="primary" @click="focusChunkTask(chunk)">open task</el-button>
+              </div>
+              <div class="chunk-trace__meta">
+                <span class="mono">{{ chunk.task_id }}</span>
+                <span>{{ chunk.task_kind || 'chunk_retry' }}</span>
+                <span>{{ taskStatusLabel(chunk.task_status || 'pending') }}</span>
+                <span v-if="chunk.task_updated_at">{{ chunk.task_updated_at }}</span>
+              </div>
+              <div v-if="chunk.task_message" class="chunk-task__message">{{ chunk.task_message }}</div>
+            </div>
             <div v-if="chunk.trace_step" class="chunk-trace">
               <div class="chunk-trace__head">
                 <span class="chunk-trace__title">{{ chunk.trace_step.title || chunk.trace_step.step_name }}</span>
@@ -409,6 +494,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '../../lib/api'
+import { normalizeTraceStatus, normalizeTraceStep, sortTraceSteps } from '../../lib/trace'
 
 const props = defineProps({
   groupId: { type: String, required: true },
@@ -426,6 +512,8 @@ const retryingChunkId = ref('')
 const docs = ref([])
 const tasks = ref([])
 const selectedTaskId = ref('')
+const selectedTaskTrace = ref(null)
+const taskTraceLoading = ref(false)
 const autoRefresh = ref(true)
 let timer = null
 
@@ -494,8 +582,19 @@ const taskMap = computed(() => {
   return out
 })
 
-const runningTasks = computed(() => tasks.value.filter((x) => ['pending', 'running'].includes(x.status)).length)
-const failedTasks = computed(() => tasks.value.filter((x) => x.status === 'failed').length)
+const selectedTask = computed(() => (
+  tasks.value.find((task) => task.task_id === selectedTaskId.value)
+  || selectedTaskTrace.value?.task
+  || null
+))
+
+const selectedTaskTimeline = computed(() => {
+  const steps = Array.isArray(selectedTaskTrace.value?.timeline?.steps) ? selectedTaskTrace.value.timeline.steps : []
+  return sortTraceSteps(steps)
+})
+
+const runningTasks = computed(() => tasks.value.filter((x) => ['pending', 'running', 'recovering', 'cancel_requested'].includes(x.status)).length)
+const failedTasks = computed(() => tasks.value.filter((x) => ['failed', 'cancelled'].includes(x.status)).length)
 const logEmptyText = computed(() => {
   if (logQuery.task_id && !logState.fallback_used) return '当前 task_id 下没有匹配日志'
   if (logQuery.doc_id) return '当前 doc_id 下没有匹配日志'
@@ -503,14 +602,26 @@ const logEmptyText = computed(() => {
 })
 
 function taskTone(status) {
-  if (status === 'completed') return 'success'
-  if (status === 'failed') return 'danger'
-  if (status === 'running') return 'warning'
+  const normalized = normalizeTraceStatus(status)
+  if (normalized === 'completed') return 'success'
+  if (normalized === 'failed' || status === 'cancelled') return 'danger'
+  if (normalized === 'running') return 'warning'
   return 'info'
 }
 
 function taskLabel(task) {
   return `${task.status} · ${task.stage}`
+}
+
+function taskStatusLabel(status) {
+  const normalized = normalizeTraceStatus(status)
+  if (status === 'recovering') return '恢复中'
+  if (status === 'cancel_requested') return '取消中'
+  if (status === 'cancelled') return '已取消'
+  if (normalized === 'completed') return '已完成'
+  if (normalized === 'failed') return '失败'
+  if (normalized === 'running') return '运行中'
+  return '待处理'
 }
 
 function readDocStage(row) {
@@ -547,13 +658,14 @@ function docStageLabel(row) {
   if (stage === 'graph_completed') return '图谱构建完成'
   if (stage === 'graph_failed') return '图谱构建失败'
   if (stage === 'graph_retrying') return '图谱重试中'
+  if (stage === 'graph_cancelled') return '图谱已取消'
   return '状态未知'
 }
 
 function docStageTone(row) {
   const stage = readDocStage(row)
   if (stage === 'graph_completed') return 'success'
-  if (stage === 'graph_failed') return 'danger'
+  if (stage === 'graph_failed' || stage === 'graph_cancelled') return 'danger'
   if (stage === 'graph_processing' || stage === 'graph_retrying') return 'warning'
   return 'info'
 }
@@ -565,12 +677,13 @@ function docStageHint(row) {
   if (stage === 'graph_completed') return '图检索已可用'
   if (stage === 'graph_failed') return '已保留中间状态，可继续重试'
   if (stage === 'graph_retrying') return '正在基于已有中间状态继续运行'
+  if (stage === 'graph_cancelled') return '任务已取消，可再次续跑'
   return '等待状态同步'
 }
 
 function canRetryGraph(row) {
   const stage = readDocStage(row)
-  return stage === 'graph_failed' || stage === 'base_completed' || stage === 'graph_retrying'
+  return stage === 'graph_failed' || stage === 'base_completed' || stage === 'graph_retrying' || stage === 'graph_cancelled'
 }
 
 function graphStageText(stage) {
@@ -645,6 +758,10 @@ function buildChunkSearchText(chunk) {
     chunk?.resolved_text,
     chunk?.entity_relation_raw,
     chunk?.error,
+    chunk?.task_id,
+    chunk?.task_kind,
+    chunk?.task_status,
+    chunk?.task_message,
     chunk?.trace_step?.title,
     chunk?.trace_step?.step_name,
     chunk?.trace_step?.error?.message,
@@ -671,6 +788,21 @@ function prettyJson(value) {
   } catch {
     return String(value || '')
   }
+}
+
+function focusChunkTask(chunk) {
+  const taskId = String(chunk?.task_id || '').trim()
+  if (!taskId) return
+  const task = tasks.value.find((item) => item.task_id === taskId)
+  if (task) {
+    selectTask(task)
+    return
+  }
+  selectedTaskId.value = taskId
+  logQuery.task_id = taskId
+  if (chunksDoc.value?.doc_id) logQuery.doc_id = chunksDoc.value.doc_id
+  loadTaskTrace(taskId)
+  loadLogs()
 }
 
 function resetChunkFilter() {
@@ -727,13 +859,33 @@ async function loadTasks() {
     tasks.value = Array.isArray(res.data) ? res.data : []
     if (selectedTaskId.value && !tasks.value.some((task) => task.task_id === selectedTaskId.value)) {
       selectedTaskId.value = ''
+      selectedTaskTrace.value = null
       if (logQuery.task_id) logQuery.task_id = ''
     }
     if (!selectedTaskId.value && tasks.value.length) {
       selectTask(tasks.value[0], { silent: true })
+    } else if (selectedTaskId.value) {
+      const active = tasks.value.find((task) => task.task_id === selectedTaskId.value)
+      if (active && !taskTraceLoading.value) {
+        loadTaskTrace(active.task_id, { silent: true })
+      }
     }
   } finally {
     tasksLoading.value = false
+  }
+}
+
+async function loadTaskTrace(taskId, options = {}) {
+  if (!String(taskId || '').trim()) {
+    selectedTaskTrace.value = null
+    return
+  }
+  if (!options.silent) taskTraceLoading.value = true
+  try {
+    const res = await api.get(`/ingest-tasks/${encodeURIComponent(taskId)}/trace`)
+    selectedTaskTrace.value = res.data || null
+  } finally {
+    if (!options.silent) taskTraceLoading.value = false
   }
 }
 
@@ -821,6 +973,7 @@ function selectTask(task, options = {}) {
   selectedTaskId.value = task.task_id
   logQuery.task_id = task.task_id
   logQuery.doc_id = task.doc_id
+  loadTaskTrace(task.task_id, { silent: Boolean(options.silent) })
   if (!options.silent) loadLogs()
 }
 
@@ -922,6 +1075,26 @@ async function retryGraph(row) {
   }
 }
 
+function canResumeTask(task) {
+  return ['failed', 'cancelled', 'completed'].includes(String(task?.status || '').trim())
+}
+
+function canCancelTask(task) {
+  return ['pending', 'running', 'recovering'].includes(String(task?.status || '').trim())
+}
+
+async function resumeTask(task) {
+  const res = await api.post(`/ingest-tasks/${encodeURIComponent(task.task_id)}/resume`)
+  ElMessage.success(`已触发续跑：${res.data?.task_id || task.task_id}`)
+  await Promise.all([loadTasks(), loadDocs(), loadLogs(), loadTaskTrace(task.task_id)])
+}
+
+async function cancelTask(task) {
+  await api.post(`/ingest-tasks/${encodeURIComponent(task.task_id)}/cancel`)
+  ElMessage.success(`已请求取消：${task.task_id}`)
+  await Promise.all([loadTasks(), loadDocs(), loadLogs(), loadTaskTrace(task.task_id)])
+}
+
 async function retryChunk(chunk) {
   if (!chunksDoc.value) return
   retryingChunkId.value = chunk.chunk_id
@@ -931,14 +1104,20 @@ async function retryChunk(chunk) {
       null,
       { params: { group_id: props.groupId } },
     )
-    const rebuildTask = res.data?.graph_rebuild_task
-    if (rebuildTask?.task_id) {
-      ElMessage.success(`块重试成功，已自动触发图谱续跑：${rebuildTask.task_id}`)
-    } else {
-      ElMessage.success('块重试已完成')
+    const task = res.data?.task || {}
+    const taskId = String(task.task_id || '').trim()
+    if (taskId) {
+      selectedTaskId.value = taskId
+      logQuery.task_id = taskId
+      logQuery.doc_id = chunksDoc.value.doc_id
     }
+    ElMessage.success(taskId ? `chunk retry task submitted: ${taskId}` : 'chunk retry task submitted')
     await Promise.all([loadDocs(), loadTasks(), refreshChunks()])
-    await loadLogs()
+    if (taskId) {
+      await Promise.all([loadTaskTrace(taskId), loadLogs()])
+    } else {
+      await loadLogs()
+    }
   } finally {
     retryingChunkId.value = ''
   }
@@ -958,7 +1137,7 @@ async function clearFinishedTasks() {
   await ElMessageBox.confirm('确认清理当前分组下已结束的任务记录？运行中的任务不会被清理。', '清理确认', { type: 'warning' })
   const res = await api.post('/ingest-tasks/clear', {
     group_id: props.groupId,
-    statuses: ['completed', 'failed'],
+    statuses: ['completed', 'failed', 'cancelled'],
   })
   const deleted = Number(res.data?.deleted || 0)
   ElMessage.success(`已清理 ${deleted} 条任务记录`)
@@ -1234,6 +1413,93 @@ onBeforeUnmount(() => {
   background: #f4f7f9;
   color: #738491;
   text-align: center;
+}
+
+.task-trace-panel {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(20, 48, 61, 0.08);
+}
+
+.task-trace-panel__head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.task-trace-panel__summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.task-trace-list {
+  display: grid;
+  gap: 10px;
+  max-height: 420px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.task-trace-card {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(20, 48, 61, 0.08);
+  background: rgba(255, 255, 255, 0.94);
+}
+
+.task-trace-card.is-success {
+  border-color: rgba(31, 157, 85, 0.2);
+}
+
+.task-trace-card.is-warning {
+  border-color: rgba(217, 145, 0, 0.22);
+}
+
+.task-trace-card.is-danger {
+  border-color: rgba(204, 61, 61, 0.24);
+}
+
+.task-trace-card__head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.task-trace-card__title {
+  font-weight: 700;
+  color: var(--brand-strong);
+}
+
+.task-trace-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-sub);
+}
+
+.task-trace-card__desc {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-main);
+  white-space: pre-wrap;
+}
+
+.task-trace-card__error {
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: #fff1f1;
+  border: 1px solid #ffd7d7;
+  color: #9c2323;
+  font-size: 12px;
 }
 
 .task-card {
@@ -1578,6 +1844,21 @@ onBeforeUnmount(() => {
   border-radius: 14px;
   background: #f6fafc;
   border: 1px solid #d8e4eb;
+}
+
+.chunk-task {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: #fffdf5;
+  border: 1px solid #f1dfae;
+}
+
+.chunk-task__message {
+  font-size: 12px;
+  color: #6a5a1c;
+  line-height: 1.6;
 }
 
 .chunk-trace__head {

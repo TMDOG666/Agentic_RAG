@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 from grag.observability import get_current_trace_recorder
@@ -27,8 +28,14 @@ def emit_event(event_type: str, payload: dict[str, Any] | None = None) -> None:
     if payload:
         body.update(payload)
 
+    timestamp = datetime.now(timezone.utc).isoformat()
+    body.setdefault("updated_at", timestamp)
+    body.setdefault("started_at", body.get("timestamp") or timestamp)
+    body.setdefault("timestamp", timestamp)
+
     recorder = get_current_trace_recorder()
     if recorder is not None:
+        body.setdefault("trace_id", recorder.trace_id)
         recorder.record_event(
             source="agent",
             event_type=str(event_type),

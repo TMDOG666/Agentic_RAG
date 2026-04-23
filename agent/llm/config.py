@@ -1,107 +1,148 @@
-"""llm.config
- 
- LLM 接口层（LLM Interface Layer）。
- 
- 职责：
- - 从 YAML 配置文件加载 Agent/LLM 配置（多 provider）
- - 根据配置与环境变量覆盖规则创建 LangChain 模型对象（OpenAI 兼容接口）
- 
- 约定：
- - 使用 `langchain_openai.ChatOpenAI` 作为统一的 OpenAI-Compatible 客户端
- - 通过 `base_url` 指向不同厂商/本地服务（vLLM/Ollama/LM Studio 等）
- 
- 环境变量覆盖优先级（高 -> 低）：
- - `AGENT_PROVIDER`
- - `AGENT_MODEL`
- - `AGENT_BASE_URL`
- - `AGENT_TEMPERATURE`
- - `AGENT_API_KEY`
- - provider 配置中的 `api_key_env`
- - 兼容：`SILICONFLOW_API_KEY` / `SILICONFLOW_BASE_URL`
- """
- 
+"""Agent LLM 配置解析。
+
+职责：
+- 从 YAML 加载 Agent 配置；
+- 统一解析环境变量覆盖优先级；
+- 生成可打印的运行时配置快照；
+- 基于最终生效配置构造 ChatOpenAI 模型。
+"""
+
+from __future__ import annotations
+
 import os
 from pathlib import Path
- 
+from typing import Any
+
 import yaml
-from langchain_openai import ChatOpenAI
 
 
-def load_agent_config(config_path: str = "agent_config.yaml") -> dict:
-    """加载 Agent 配置。
- 
-     如果配置文件不存在，则返回一个内置默认配置（以 siliconflow 为默认 provider）。
- 
-     Args:
-         config_path: 配置文件路径。
- 
-     Returns:
-         dict: 配置字典。
-     """
+DEFAULT_AGENT_CONFIG: dict[str, Any] = {
+    "provider": "siliconflow",
+    "providers": {
+        "siliconflow": {
+            "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+            "base_url": "https://api.siliconflow.cn/v1",
+            "api_key_env": "SILICONFLOW_API_KEY",
+            "temperature": 0,
+        }
+    },
+}
+
+
+def load_agent_config(config_path: str = "agent_config.yaml") -> dict[str, Any]:
+    """加载 Agent 配置，不存在时返回最小可运行默认值。"""
     path = Path(config_path)
     if not path.exists():
-        # 提供一个可运行的最小默认配置，避免“无配置即崩溃”。
-        return {
-            "provider": "siliconflow",
-            "providers": {
-                "siliconflow": {
-                    "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
-                    "base_url": "https://api.siliconflow.cn/v1",
-                    "api_key_env": "SILICONFLOW_API_KEY",
-                    "temperature": 0,
-                }
-            },
-        }
+        return dict(DEFAULT_AGENT_CONFIG)
 
-    with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
+    with open(path, "r", encoding="utf-8") as file:
+        payload = yaml.safe_load(file) or {}
+    return payload if isinstance(payload, dict) else {}
 
 
-def create_model(config: dict) -> ChatOpenAI:
-    """根据配置与环境变量创建模型对象。
- 
-     说明：
- - 本项目统一走 OpenAI-Compatible 协议，因此用 `ChatOpenAI` 作为客户端
- - `provider` 只是“选择哪组配置”的逻辑概念，最终由 `base_url` 决定请求发往何处
- 
- Args:
-     config: `load_agent_config()` 返回的配置字典。
- 
- Returns:
-     ChatOpenAI: 可直接 `.invoke()` 的 LangChain Chat 模型实例。
-     """
-    # provider 的选择优先由环境变量覆盖，其次读取配置文件。
-    provider = os.environ.get("AGENT_PROVIDER") or config.get("provider") or "siliconflow"
+def _resolve_agent_provider_name(config: dict[str, Any]) -> str:
+    provider = str(os.environ.get("AGENT_PROVIDER") or config.get("provider") or "siliconflow").strip()
+    return provider or "siliconflow"
+
+
+def resolve_agent_runtime_config(config: dict[str, Any]) -> dict[str, Any]:
+    """解析 Agent 运行时最终生效配置。
+
+    覆盖优先级：
+    1. `AGENT_*` 环境变量
+    2. provider 配置中的字段
+    3. siliconflow 历史兼容环境变量
+    4. 内置兜底
+    """
+
     providers = config.get("providers") or {}
-    pconf = providers.get(provider) or {}
+    provider_name = _resolve_agent_provider_name(config)
+    provider_config = providers.get(provider_name) or {}
 
-    # model/base_url/temperature 允许用环境变量覆盖。
-    model = os.environ.get("AGENT_MODEL") or pconf.get("model")
-    base_url = os.environ.get("AGENT_BASE_URL") or pconf.get("base_url")
-    if not base_url and provider == "siliconflow":
-        # 兼容旧环境变量命名。
-        base_url = os.environ.get("SILICONFLOW_BASE_URL")
+    model = str(os.environ.get("AGENT_MODEL") or provider_config.get("model") or "").strip()
+    base_url = str(os.environ.get("AGENT_BASE_URL") or provider_config.get("base_url") or "").strip()
+    if not base_url and provider_name == "siliconflow":
+        base_url = str(os.environ.get("SILICONFLOW_BASE_URL") or "").strip()
 
     temperature_raw = os.environ.get("AGENT_TEMPERATURE")
-    temperature = float(temperature_raw) if temperature_raw is not None else float(pconf.get("temperature", 0))
+    if temperature_raw is not None:
+        temperature = float(temperature_raw)
+        temperature_source = "AGENT_TEMPERATURE"
+    else:
+        temperature = float(provider_config.get("temperature", 0))
+        temperature_source = "config"
 
-    # API Key 的获取顺序：
-    # 1) AGENT_API_KEY
-    # 2) provider 配置中的 api_key_env 对应的环境变量
-    # 3) siliconflow 兼容：SILICONFLOW_API_KEY
-    api_key = os.environ.get("AGENT_API_KEY")
-    if not api_key:
-        api_key_env = pconf.get("api_key_env") or "OPENAI_API_KEY"
-        api_key = os.environ.get(api_key_env)
-        if not api_key and provider == "siliconflow":
-            api_key = os.environ.get("SILICONFLOW_API_KEY")
+    api_key = str(os.environ.get("AGENT_API_KEY") or "").strip()
+    api_key_source = "AGENT_API_KEY" if api_key else ""
+    configured_api_key_env = str(provider_config.get("api_key_env") or "OPENAI_API_KEY").strip()
+    if not api_key and configured_api_key_env:
+        api_key = str(os.environ.get(configured_api_key_env) or "").strip()
+        if api_key:
+            api_key_source = configured_api_key_env
+    if not api_key and provider_name == "siliconflow":
+        api_key = str(os.environ.get("SILICONFLOW_API_KEY") or "").strip()
+        if api_key:
+            api_key_source = "SILICONFLOW_API_KEY"
 
-    # 对部分本地服务，api_key 可能不校验。这里提供一个占位，避免 LangChain 构造失败。
-    api_key = api_key or "EMPTY"
+    return {
+        "provider_name": provider_name,
+        "provider_source": "AGENT_PROVIDER" if os.environ.get("AGENT_PROVIDER") else "config",
+        "model": model,
+        "model_source": "AGENT_MODEL" if os.environ.get("AGENT_MODEL") else "config",
+        "base_url": base_url,
+        "base_url_source": (
+            "AGENT_BASE_URL"
+            if os.environ.get("AGENT_BASE_URL")
+            else ("SILICONFLOW_BASE_URL" if provider_name == "siliconflow" and os.environ.get("SILICONFLOW_BASE_URL") else "config")
+        ),
+        "temperature": temperature,
+        "temperature_source": temperature_source,
+        "api_key": api_key or "EMPTY",
+        "api_key_present": bool(api_key),
+        "api_key_source": api_key_source,
+        "configured_api_key_env": configured_api_key_env,
+        "config_source": "env" if any(
+            os.environ.get(name)
+            for name in (
+                "AGENT_PROVIDER",
+                "AGENT_MODEL",
+                "AGENT_BASE_URL",
+                "AGENT_TEMPERATURE",
+                "AGENT_API_KEY",
+            )
+        ) else "config",
+        "provider_config": provider_config,
+    }
 
+
+def build_agent_runtime_snapshot(config_path: str = "agent_config.yaml") -> dict[str, Any]:
+    """生成 Agent 配置快照，供启动日志与排障使用。"""
+    config = load_agent_config(config_path)
+    runtime = resolve_agent_runtime_config(config)
+    return {
+        "config_path": str(config_path),
+        "provider_name": runtime["provider_name"],
+        "provider_source": runtime["provider_source"],
+        "model": runtime["model"],
+        "model_source": runtime["model_source"],
+        "base_url": runtime["base_url"],
+        "base_url_source": runtime["base_url_source"],
+        "temperature": runtime["temperature"],
+        "temperature_source": runtime["temperature_source"],
+        "api_key_present": runtime["api_key_present"],
+        "api_key_source": runtime["api_key_source"],
+        "config_source": runtime["config_source"],
+    }
+
+
+def create_model(config: dict[str, Any]):
+    """根据最终生效的 Agent 配置构造模型实例。"""
+    from langchain_openai import ChatOpenAI
+
+    runtime = resolve_agent_runtime_config(config)
     return ChatOpenAI(
-        model=model,
-        temperature=temperature,
-        api_key=api_key,
-        base_url=base_url,
+        model=runtime["model"],
+        temperature=runtime["temperature"],
+        api_key=runtime["api_key"],
+        base_url=runtime["base_url"] or None,
     )

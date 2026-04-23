@@ -25,6 +25,13 @@ class IngestTasksService:
     def list_recoverable_tasks(self, *, limit: int = 200) -> list[IngestTaskRecord]:
         return self._pg.list_recoverable_ingest_tasks(limit=int(limit))
 
+    def upsert_task(self, *, task: IngestTaskRecord) -> None:
+        self._pg.upsert_ingest_task(task=task)
+
+    def get_latest_task(self, *, group_id: str, doc_id: str) -> IngestTaskRecord | None:
+        tasks = self.list_tasks(group_id=group_id, doc_id=doc_id, limit=1)
+        return tasks[0] if tasks else None
+
     def delete_task(self, *, task_id: str) -> bool:
         return bool(self._pg.delete_ingest_task(task_id=task_id))
 

@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from api.presentation.trace_dto import build_graph_trace_timeline, map_chunk_checkpoint_to_step
 from api.schemas.chunks import ChunkOut
 from api.schemas.documents import DocumentOut
+from api.schemas.ingest_tasks import IngestTaskOut
 from api.services.documents_service import DocumentsService
 
 router = APIRouter()
@@ -21,6 +22,11 @@ def _build_chunk_out(item) -> ChunkOut:
         parsed_entities=list((item.parsed_json or {}).get("entities") or []),
         parsed_relations=list((item.parsed_json or {}).get("relations") or []),
         parse_errors=list((item.parsed_json or {}).get("errors") or []),
+        task_id=str(item.latest_task_id or ""),
+        task_status=str(item.latest_task_status or ""),
+        task_kind=str(item.latest_task_kind or ""),
+        task_updated_at=str(item.latest_task_updated_at or ""),
+        task_message=str(item.latest_task_message or ""),
     )
     chunk_out.trace_step = map_chunk_checkpoint_to_step(chunk_out)
     return chunk_out
@@ -69,13 +75,16 @@ def retry_document_chunk(group_id: str, doc_id: str, chunk_id: str) -> dict:
     svc = DocumentsService()
     result = svc.retry_document_chunk(group_id=group_id, doc_id=doc_id, chunk_id=chunk_id)
     chunk = result.get("chunk")
+    task = result.get("task")
     if chunk is None:
-        raise ValueError(f"chunk not found after retry: {chunk_id}")
+        raise ValueError(f"chunk not found after retry submit: {chunk_id}")
+    if task is None:
+        raise ValueError(f"chunk retry task not found after submit: {chunk_id}")
     return {
+        "task": IngestTaskOut.from_record(task).model_dump(),
         "chunk": _build_chunk_out(chunk).model_dump(),
         "graph_progress": result.get("graph_progress") or {},
         "graph_trace": build_graph_trace_timeline(result.get("graph_progress") or {}).model_dump(),
-        "graph_rebuild_task": result.get("graph_rebuild_task"),
     }
 
 

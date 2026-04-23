@@ -3,11 +3,14 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from api.schemas.ingest_tasks import (
+    IngestTaskCancelOut,
     IngestTaskClearIn,
     IngestTaskClearOut,
     IngestTaskDeleteOut,
     IngestTaskOut,
+    IngestTaskTraceOut,
 )
+from api.services.trace_service import TraceService
 from api.services.ingest_tasks_service import IngestTasksService
 from grag.graph_construction.async_graph_service import AsyncGraphBuildService
 
@@ -32,6 +35,16 @@ def get_ingest_task(task_id: str) -> IngestTaskOut | None:
     return IngestTaskOut.from_record(task) if task is not None else None
 
 
+@router.get("/{task_id}/trace")
+def get_ingest_task_trace(task_id: str) -> IngestTaskTraceOut:
+    svc = IngestTasksService()
+    task = svc.get_task(task_id=task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    timeline = TraceService().get_ingest_task_trace(task_id=task_id)
+    return IngestTaskTraceOut(task=IngestTaskOut.from_record(task), timeline=timeline)
+
+
 @router.delete("/{task_id}")
 def delete_ingest_task(task_id: str) -> IngestTaskDeleteOut:
     try:
@@ -39,6 +52,24 @@ def delete_ingest_task(task_id: str) -> IngestTaskDeleteOut:
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return IngestTaskDeleteOut(ok=ok, task_id=str(task_id))
+
+
+@router.post("/{task_id}/cancel")
+def cancel_ingest_task(task_id: str) -> IngestTaskCancelOut:
+    try:
+        task = AsyncGraphBuildService.instance().request_cancel(task_id=task_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return IngestTaskCancelOut(ok=True, task_id=str(task_id), status=str(task.status))
+
+
+@router.post("/{task_id}/resume")
+def resume_ingest_task(task_id: str) -> IngestTaskOut:
+    try:
+        task = AsyncGraphBuildService.instance().resume_task(task_id=task_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return IngestTaskOut.from_record(task)
 
 
 @router.post("/clear")

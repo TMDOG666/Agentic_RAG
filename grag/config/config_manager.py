@@ -304,6 +304,46 @@ class ConfigManager:
 
         return info
 
+    def get_runtime_snapshot(self) -> Dict[str, Any]:
+        self._ensure_initialized()
+        return self._settings.build_runtime_config_snapshot()
+
+    def format_runtime_snapshot_lines(self) -> List[str]:
+        snapshot = self.get_runtime_snapshot()
+
+        def _render(prefix: str, payload: Dict[str, Any]) -> str:
+            provider_name = str(payload.get("provider_name") or "unknown")
+            model = str(payload.get("model") or "unknown")
+            base_url = str(payload.get("base_url") or "")
+            api_key_text = "yes" if payload.get("api_key_present") else "no"
+            api_key_source = str(payload.get("api_key_source") or "") or "-"
+            config_source = str(payload.get("config_source") or "config")
+            extras: list[str] = []
+            if payload.get("dimension") is not None:
+                extras.append(f"dimension={payload.get('dimension')}")
+            if payload.get("top_k") is not None:
+                extras.append(f"top_k={payload.get('top_k')}")
+            return (
+                f"{prefix}: provider={provider_name} model={model}"
+                + (f" base_url={base_url}" if base_url else "")
+                + f" api_key={api_key_text}"
+                + f" api_key_source={api_key_source}"
+                + f" source={config_source}"
+                + (f" {' '.join(extras)}" if extras else "")
+            )
+
+        return [
+            _render("Default LLM", snapshot["defaults"]["llm"]),
+            _render("Default Embedding", snapshot["defaults"]["embedding"]),
+            _render("Default Reranker", snapshot["defaults"]["reranker"]),
+            _render("Default Vision", snapshot["defaults"]["vision"]),
+            _render("Ingest LLM", snapshot["ingest"]["global_llm"]),
+            _render("Ingest Coref LLM", snapshot["ingest"]["coreference_resolution"]),
+            _render("Ingest Extraction LLM", snapshot["ingest"]["entity_relation_extraction"]),
+            _render("Ingest Fusion LLM", snapshot["ingest"]["fusion"]),
+            _render("Ingest EntityAlignment LLM", snapshot["ingest"]["entity_alignment"]),
+        ]
+
     def add_custom_validator(self, field_path: str, validator_func) -> None:
         """添加自定义验证器
 

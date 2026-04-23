@@ -433,6 +433,174 @@ class GraphRAGSettings(BaseModel):
             "entity_alignment": global_provider,
         }
 
+    @staticmethod
+    def _provider_override_names(provider_type: ProviderType) -> Dict[str, str]:
+        if provider_type == ProviderType.LLM:
+            return {
+                "provider": "GRAG_LLM_PROVIDER",
+                "model": "GRAG_LLM_MODEL",
+                "base_url": "GRAG_LLM_BASE_URL",
+                "api_key": "GRAG_LLM_API_KEY",
+            }
+        if provider_type == ProviderType.EMBEDDING:
+            return {
+                "provider": "GRAG_EMBEDDING_PROVIDER",
+                "model": "GRAG_EMBEDDING_MODEL",
+                "base_url": "GRAG_EMBEDDING_BASE_URL",
+                "api_key": "GRAG_EMBEDDING_API_KEY",
+            }
+        if provider_type == ProviderType.RERANKER:
+            return {
+                "provider": "GRAG_RERANKER_PROVIDER",
+                "model": "GRAG_RERANKER_MODEL",
+                "base_url": "GRAG_RERANKER_BASE_URL",
+                "api_key": "GRAG_RERANKER_API_KEY",
+            }
+        if provider_type == ProviderType.VISION:
+            return {
+                "provider": "GRAG_VISION_PROVIDER",
+                "model": "GRAG_VISION_MODEL",
+                "base_url": "GRAG_VISION_BASE_URL",
+                "api_key": "GRAG_VISION_API_KEY",
+            }
+        return {}
+
+    @staticmethod
+    def _provider_legacy_api_envs(provider_name: str) -> List[str]:
+        normalized = str(provider_name or "").strip().lower()
+        if normalized == "siliconflow":
+            return ["SILICONFLOW_API_KEY"]
+        return []
+
+    def resolve_effective_provider_name(self, provider_type: ProviderType, provider_name: Optional[str] = None) -> str:
+        override_names = self._provider_override_names(provider_type)
+        override_provider = str(os.environ.get(override_names.get("provider", ""), "") or "").strip()
+        if override_provider:
+            return override_provider
+        if provider_name:
+            return str(provider_name).strip()
+        return str(
+            {
+                ProviderType.LLM: self.llm_provider,
+                ProviderType.EMBEDDING: self.embedding_provider,
+                ProviderType.RERANKER: self.reranker_provider,
+                ProviderType.VISION: self.vision_provider,
+            }.get(provider_type)
+            or ""
+        ).strip()
+
+    def resolve_effective_provider_snapshot(
+        self,
+        provider_type: ProviderType,
+        provider_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        effective_provider_name = self.resolve_effective_provider_name(provider_type, provider_name)
+        if not effective_provider_name:
+            return {
+                "provider_type": provider_type.value,
+                "provider_name": "",
+                "provider_source": "unset",
+                "model": "",
+                "model_source": "unset",
+                "base_url": "",
+                "base_url_source": "unset",
+                "timeout": None,
+                "api_key_present": False,
+                "api_key_source": "",
+                "config_source": "unset",
+            }
+
+        provider_config = self.get_provider_config(provider_type, effective_provider_name)
+        override_names = self._provider_override_names(provider_type)
+
+        provider_override_name = override_names.get("provider", "")
+        provider_source = provider_override_name if os.environ.get(provider_override_name, "") else "config"
+
+        model_override_name = override_names.get("model", "")
+        model = str(os.environ.get(model_override_name, "") or getattr(provider_config, "model", "") or "").strip()
+        model_source = model_override_name if os.environ.get(model_override_name, "") else "config"
+
+        base_url_override_name = override_names.get("base_url", "")
+        base_url = str(os.environ.get(base_url_override_name, "") or getattr(provider_config, "base_url", "") or "").strip()
+        base_url_source = base_url_override_name if os.environ.get(base_url_override_name, "") else "config"
+
+        api_key_present = False
+        api_key_source = ""
+        api_key_override_name = override_names.get("api_key", "")
+        if api_key_override_name and os.environ.get(api_key_override_name):
+            api_key_present = True
+            api_key_source = api_key_override_name
+        else:
+            configured_api_env = str(getattr(provider_config, "api_key_env", "") or "").strip()
+            if configured_api_env and os.environ.get(configured_api_env):
+                api_key_present = True
+                api_key_source = configured_api_env
+            else:
+                for legacy_env in self._provider_legacy_api_envs(effective_provider_name):
+                    if os.environ.get(legacy_env):
+                        api_key_present = True
+                        api_key_source = legacy_env
+                        break
+
+        snapshot: Dict[str, Any] = {
+            "provider_type": provider_type.value,
+            "provider_name": effective_provider_name,
+            "provider_source": provider_source,
+            "model": model,
+            "model_source": model_source,
+            "base_url": base_url,
+            "base_url_source": base_url_source,
+            "timeout": getattr(provider_config, "timeout", None),
+            "api_key_present": api_key_present,
+            "api_key_source": api_key_source,
+            "config_source": (
+                "env+config"
+                if provider_source != "config" or model_source != "config" or base_url_source != "config" or api_key_source
+                else "config"
+            ),
+        }
+        if hasattr(provider_config, "temperature"):
+            snapshot["temperature"] = getattr(provider_config, "temperature", None)
+        if hasattr(provider_config, "max_tokens"):
+            snapshot["max_tokens"] = getattr(provider_config, "max_tokens", None)
+        if hasattr(provider_config, "dimension"):
+            snapshot["dimension"] = getattr(provider_config, "dimension", None)
+        if hasattr(provider_config, "max_batch_size"):
+            snapshot["max_batch_size"] = getattr(provider_config, "max_batch_size", None)
+        if hasattr(provider_config, "top_k"):
+            snapshot["top_k"] = getattr(provider_config, "top_k", None)
+        return snapshot
+
+    def build_runtime_config_snapshot(self) -> Dict[str, Any]:
+        ingest_stage_providers = self.resolve_graph_construction_llm_providers()
+        return {
+            "defaults": {
+                "llm": self.resolve_effective_provider_snapshot(ProviderType.LLM),
+                "embedding": self.resolve_effective_provider_snapshot(ProviderType.EMBEDDING),
+                "reranker": self.resolve_effective_provider_snapshot(ProviderType.RERANKER),
+                "vision": self.resolve_effective_provider_snapshot(ProviderType.VISION),
+            },
+            "ingest": {
+                "global_llm": self.resolve_effective_provider_snapshot(ProviderType.LLM),
+                "coreference_resolution": self.resolve_effective_provider_snapshot(
+                    ProviderType.LLM,
+                    ingest_stage_providers.get("coreference_resolution"),
+                ),
+                "entity_relation_extraction": self.resolve_effective_provider_snapshot(
+                    ProviderType.LLM,
+                    ingest_stage_providers.get("entity_relation_extraction"),
+                ),
+                "fusion": self.resolve_effective_provider_snapshot(
+                    ProviderType.LLM,
+                    ingest_stage_providers.get("fusion"),
+                ),
+                "entity_alignment": self.resolve_effective_provider_snapshot(
+                    ProviderType.LLM,
+                    ingest_stage_providers.get("entity_alignment"),
+                ),
+            },
+        }
+
     def get_env_var(self, env_var_name: str, default: Optional[str] = None) -> Optional[str]:
         """获取环境变量值
 
