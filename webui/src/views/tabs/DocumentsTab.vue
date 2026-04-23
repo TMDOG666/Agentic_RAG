@@ -79,6 +79,14 @@
                 <div class="graph-progress__pipeline">
                   <div class="graph-progress__stage">{{ graphStageLabel(row) }}</div>
                   <div class="graph-progress__hint">{{ graphStageHint(row) }}</div>
+                  <div v-if="graphTrace(row).steps?.length" class="graph-progress__trace">
+                    <span class="summary-pill" :class="`is-${chunkTone(graphTrace(row).summary?.status || 'pending')}`">
+                      {{ chunkStatusLabel(graphTrace(row).summary?.status || 'pending') }}
+                    </span>
+                    <span class="graph-progress__trace-text">
+                      Trace · {{ graphTrace(row).summary?.current_step_name || '暂无步骤' }}
+                    </span>
+                  </div>
                 </div>
               </div>
             </template>
@@ -260,15 +268,63 @@
       <div class="chunks-panel" v-loading="chunksLoading">
         <div class="chunks-panel__meta" v-if="chunksDoc">
           <span>doc_id: {{ chunksDoc.doc_id }}</span>
-          <span>chunk 数: {{ chunks.length }}</span>
+          <span>chunk 数: {{ filteredChunks.length }}/{{ chunks.length }}</span>
           <span>状态: {{ docStageLabel(chunksDoc) }}</span>
           <span>
             进度: {{ graphProgress(chunksDoc).completed_chunks }}/{{ graphProgress(chunksDoc).total_chunks }}
           </span>
         </div>
+        <div class="chunk-filter-bar">
+          <el-input
+            v-model="chunkFilter.query"
+            clearable
+            placeholder="搜索 chunk_id、文本、错误、告警、抽取结果"
+            class="glass-input chunk-filter-bar__search"
+          />
+          <el-select v-model="chunkFilter.status" class="glass-select chunk-filter-bar__select">
+            <el-option label="全部状态" value="all" />
+            <el-option label="失败" value="failed" />
+            <el-option label="处理中" value="running" />
+            <el-option label="已完成" value="completed" />
+            <el-option label="待处理" value="pending" />
+          </el-select>
+          <el-switch v-model="chunkFilter.issueOnly" active-text="仅看问题块" inactive-text="全部块" />
+          <el-button @click="resetChunkFilter">重置筛选</el-button>
+        </div>
+        <div class="chunk-filter-summary">
+          <span class="summary-pill is-danger">问题块 {{ problematicChunkCount }}</span>
+          <span class="summary-pill is-warning">过滤后 {{ filteredChunks.length }}</span>
+          <span v-if="chunkFilter.query" class="summary-pill is-info">关键词 {{ chunkFilter.query }}</span>
+        </div>
+        <div v-if="graphTrace(chunksDoc).steps?.length" class="trace-panel">
+          <div class="trace-panel__head">
+            <div class="trace-panel__title">文档级 Trace</div>
+            <div class="trace-panel__summary">
+              <span class="summary-pill" :class="`is-${chunkTone(graphTrace(chunksDoc).summary?.status || 'pending')}`">
+                {{ chunkStatusLabel(graphTrace(chunksDoc).summary?.status || 'pending') }}
+              </span>
+              <span>{{ graphTrace(chunksDoc).summary?.current_step_name || '暂无步骤' }}</span>
+            </div>
+          </div>
+          <div class="trace-step-list">
+            <div v-for="step in graphTrace(chunksDoc).steps" :key="step.step_id" class="trace-step-card">
+              <div class="trace-step-card__head">
+                <strong>{{ step.title || step.step_name }}</strong>
+                <span class="summary-pill" :class="`is-${chunkTone(step.status)}`">{{ chunkStatusLabel(step.status) }}</span>
+              </div>
+              <div class="trace-step-card__meta">
+                <span>{{ step.kind }}</span>
+                <span v-if="step.updated_at">{{ step.updated_at }}</span>
+                <span v-if="step.latency_ms">耗时 {{ Math.round(step.latency_ms) }} ms</span>
+              </div>
+              <div v-if="step.error?.message" class="trace-step-card__error">{{ step.error.message }}</div>
+            </div>
+          </div>
+        </div>
         <div v-if="!chunks.length && !chunksLoading" class="chunks-panel__empty">当前文档还没有可展示的文本块</div>
+        <div v-else-if="!filteredChunks.length" class="chunks-panel__empty">没有符合当前筛选条件的文本块</div>
         <div v-else class="chunk-list">
-          <article v-for="chunk in chunks" :key="chunk.chunk_id" class="chunk-card">
+          <article v-for="chunk in filteredChunks" :key="chunk.chunk_id" class="chunk-card" :class="{ 'is-problem': chunkHasIssue(chunk) }">
             <header class="chunk-card__head">
               <div>
                 <div class="chunk-card__title">Chunk {{ chunk.index + 1 }}</div>
@@ -286,6 +342,7 @@
                 <span class="summary-pill" :class="chunk.parse_errors?.length ? 'is-warning' : 'is-success'">
                   告警 {{ chunk.parse_errors?.length || 0 }}
                 </span>
+                <span v-if="chunkHasIssue(chunk)" class="summary-pill is-danger">问题块</span>
               </div>
               <el-button
                 size="small"
@@ -298,6 +355,19 @@
               </el-button>
             </div>
             <div v-if="chunk.error" class="chunk-card__error">{{ chunk.error }}</div>
+            <div v-if="chunk.trace_step" class="chunk-trace">
+              <div class="chunk-trace__head">
+                <span class="chunk-trace__title">{{ chunk.trace_step.title || chunk.trace_step.step_name }}</span>
+                <span class="summary-pill" :class="`is-${chunkTone(chunk.trace_step.status)}`">
+                  {{ chunkStatusLabel(chunk.trace_step.status) }}
+                </span>
+              </div>
+              <div class="chunk-trace__meta">
+                <span>{{ chunk.trace_step.kind }}</span>
+                <span v-if="chunk.trace_step.updated_at">{{ chunk.trace_step.updated_at }}</span>
+                <span v-if="chunk.trace_step.error?.message">{{ chunk.trace_step.error.message }}</span>
+              </div>
+            </div>
             <div class="chunk-card__section">
               <div class="chunk-card__section-title">原始文本</div>
               <pre class="chunk-card__text">{{ chunk.text }}</pre>
@@ -365,6 +435,11 @@ const chunksDrawer = ref(false)
 const chunksLoading = ref(false)
 const chunks = ref([])
 const chunksDoc = ref(null)
+const chunkFilter = reactive({
+  query: '',
+  status: 'all',
+  issueOnly: false,
+})
 
 const form = reactive({
   doc_id: '',
@@ -397,6 +472,18 @@ const chunksTitle = computed(() => {
   const row = chunksDoc.value
   if (!row) return '文本块'
   return `${row.doc_name || row.doc_id} · 文本块`
+})
+
+const problematicChunkCount = computed(() => chunks.value.filter((chunk) => chunkHasIssue(chunk)).length)
+
+const filteredChunks = computed(() => {
+  const query = String(chunkFilter.query || '').trim().toLowerCase()
+  return chunks.value.filter((chunk) => {
+    if (chunkFilter.issueOnly && !chunkHasIssue(chunk)) return false
+    if (chunkFilter.status !== 'all' && normalizeChunkStatus(chunk?.status) !== chunkFilter.status) return false
+    if (!query) return true
+    return buildChunkSearchText(chunk).includes(query)
+  })
 })
 
 const taskMap = computed(() => {
@@ -440,6 +527,16 @@ function graphProgress(row) {
     latest_stage: '',
     latest_status: '',
     pipeline: {},
+  }
+}
+
+function graphTrace(row) {
+  return row?.graph_trace || {
+    summary: {
+      status: 'pending',
+      current_step_name: '',
+    },
+    steps: [],
   }
 }
 
@@ -488,11 +585,15 @@ function graphStageText(stage) {
 }
 
 function graphStageLabel(row) {
-  return graphStageText(graphProgress(row).latest_stage)
+  return graphTrace(row).summary?.current_step_name || graphStageText(graphProgress(row).latest_stage)
 }
 
 function graphStageHint(row) {
   const progress = graphProgress(row)
+  const trace = graphTrace(row)
+  if (trace.summary?.current_step_name) {
+    return `${trace.summary?.status || 'pending'} · ${trace.summary.current_step_name}`
+  }
   if (!progress.latest_stage) return '暂无图谱阶段检查点'
   const current = progress.pipeline?.[progress.latest_stage]
   const alignmentFallbackCount = Number(progress.entity_alignment_fallback_count || 0)
@@ -504,17 +605,56 @@ function graphStageHint(row) {
 }
 
 function chunkTone(status) {
-  if (status === 'completed') return 'success'
-  if (status === 'failed') return 'danger'
-  if (status === 'processing') return 'warning'
+  const normalized = normalizeChunkStatus(status)
+  if (normalized === 'completed') return 'success'
+  if (normalized === 'failed') return 'danger'
+  if (normalized === 'running') return 'warning'
   return 'info'
 }
 
 function chunkStatusLabel(status) {
-  if (status === 'completed') return '已完成'
-  if (status === 'failed') return '失败'
-  if (status === 'processing') return '处理中'
+  const normalized = normalizeChunkStatus(status)
+  if (normalized === 'completed') return '已完成'
+  if (normalized === 'failed') return '失败'
+  if (normalized === 'running') return '处理中'
   return '待处理'
+}
+
+function normalizeChunkStatus(status) {
+  const value = String(status || '').trim().toLowerCase()
+  if (value === 'processing') return 'running'
+  if (value === 'done' || value === 'success') return 'completed'
+  if (value === 'error') return 'failed'
+  return value || 'pending'
+}
+
+function chunkHasIssue(chunk) {
+  if (!chunk) return false
+  if (normalizeChunkStatus(chunk.status) === 'failed') return true
+  if (chunk.error) return true
+  if (Array.isArray(chunk.parse_errors) && chunk.parse_errors.length > 0) return true
+  if (normalizeChunkStatus(chunk?.trace_step?.status) === 'failed') return true
+  if (chunk?.trace_step?.error?.message) return true
+  return false
+}
+
+function buildChunkSearchText(chunk) {
+  return [
+    chunk?.chunk_id,
+    chunk?.text,
+    chunk?.resolved_text,
+    chunk?.entity_relation_raw,
+    chunk?.error,
+    chunk?.trace_step?.title,
+    chunk?.trace_step?.step_name,
+    chunk?.trace_step?.error?.message,
+    Array.isArray(chunk?.parse_errors) ? chunk.parse_errors.join('\n') : '',
+    Array.isArray(chunk?.parsed_entities) ? JSON.stringify(chunk.parsed_entities) : '',
+    Array.isArray(chunk?.parsed_relations) ? JSON.stringify(chunk.parsed_relations) : '',
+  ]
+    .filter(Boolean)
+    .join('\n')
+    .toLowerCase()
 }
 
 function chunkEntityCount(chunk) {
@@ -533,11 +673,18 @@ function prettyJson(value) {
   }
 }
 
+function resetChunkFilter() {
+  chunkFilter.query = ''
+  chunkFilter.status = 'all'
+  chunkFilter.issueOnly = false
+}
+
 async function openChunks(row) {
   chunksDoc.value = row
   chunksDrawer.value = true
   chunksLoading.value = true
   chunks.value = []
+  resetChunkFilter()
   try {
     const res = await api.get(`/documents/${encodeURIComponent(row.doc_id)}/chunks`, {
       params: { group_id: props.groupId, limit: 5000 },
@@ -1043,6 +1190,18 @@ onBeforeUnmount(() => {
   word-break: break-word;
 }
 
+.graph-progress__trace {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.graph-progress__trace-text {
+  font-size: 12px;
+  color: #516977;
+}
+
 .summary-pill,
 .task-card__status {
   display: inline-flex;
@@ -1182,12 +1341,95 @@ onBeforeUnmount(() => {
   gap: 14px;
 }
 
+.trace-panel {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 18px;
+  border: 1px solid #d8e4eb;
+  background: linear-gradient(180deg, #fbfdff 0%, #f5f9fc 100%);
+}
+
+.trace-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.trace-panel__title {
+  font-weight: 700;
+  color: #173246;
+}
+
+.trace-panel__summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: #647987;
+}
+
+.trace-step-list {
+  display: grid;
+  gap: 8px;
+}
+
+.trace-step-card {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid #dbe5ec;
+}
+
+.trace-step-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.trace-step-card__meta {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: #70828e;
+}
+
+.trace-step-card__error {
+  font-size: 12px;
+  color: #9c2323;
+}
+
 .chunks-panel__meta {
   display: flex;
   gap: 12px;
   flex-wrap: wrap;
   font-size: 12px;
   color: #6f808c;
+}
+
+.chunk-filter-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) 180px auto auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.chunk-filter-bar__search,
+.chunk-filter-bar__select {
+  width: 100%;
+}
+
+.chunk-filter-summary {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .chunks-panel__empty {
@@ -1213,6 +1455,11 @@ onBeforeUnmount(() => {
   padding: 14px;
   display: grid;
   gap: 10px;
+}
+
+.chunk-card.is-problem {
+  border-color: #f0b0b0;
+  box-shadow: 0 8px 18px rgba(156, 35, 35, 0.06);
 }
 
 .chunk-card__head {
@@ -1324,7 +1571,38 @@ onBeforeUnmount(() => {
   word-break: break-word;
 }
 
+.chunk-trace {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: #f6fafc;
+  border: 1px solid #d8e4eb;
+}
+
+.chunk-trace__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.chunk-trace__title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #1c3b50;
+}
+
+.chunk-trace__meta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: #6d7f8b;
+}
+
 @media (max-width: 960px) {
+  .chunk-filter-bar,
   .chunk-card__split {
     grid-template-columns: 1fr;
   }

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
+from api.schemas.trace import TraceStepOut
 from grag.storage.types import ChunkRecord
 
 
@@ -20,6 +21,7 @@ class ChunkOut(BaseModel):
     parsed_entities: list[dict] = []
     parsed_relations: list[dict] = []
     parse_errors: list[str] = []
+    trace_step: TraceStepOut | None = None
 
     @staticmethod
     def from_chunk_record(
@@ -33,6 +35,7 @@ class ChunkOut(BaseModel):
         parsed_entities: list[dict] | None = None,
         parsed_relations: list[dict] | None = None,
         parse_errors: list[str] | None = None,
+        trace_step: TraceStepOut | None = None,
     ) -> "ChunkOut":
         return ChunkOut(
             group_id=str(chunk.group_id),
@@ -49,4 +52,5 @@ class ChunkOut(BaseModel):
             parsed_entities=list(parsed_entities or []),
             parsed_relations=list(parsed_relations or []),
             parse_errors=[str(item) for item in (parse_errors or [])],
+            trace_step=trace_step,
         )

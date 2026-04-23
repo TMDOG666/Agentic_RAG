@@ -5,7 +5,7 @@
         <div class="session-panel__header">
           <div>
             <div class="section-title">会话历史</div>
-            <div class="section-subtitle">当前历史只保存在浏览器本地，后续可以独立拆除。</div>
+            <div class="section-subtitle">当前历史只保存在浏览器本地，后续可独立替换为后端持久化模块。</div>
           </div>
           <el-button type="primary" class="brand-button" @click="startNewSession">新建会话</el-button>
         </div>
@@ -31,7 +31,7 @@
           </div>
           <div class="session-item__meta">{{ formatSessionMeta(session) }}</div>
           <div class="session-item__stats">
-            <span>{{ Math.max(0, session.messages.length - 1) }} 条消息</span>
+            <span>{{ Math.max(0, (session.messages || []).length - 1) }} 条消息</span>
             <span>{{ Array.isArray(session.runs) ? session.runs.length : 0 }} 次运行</span>
           </div>
         </button>
@@ -43,13 +43,13 @@
         <div class="agent-header">
           <div>
             <div class="section-title">Agent 对话工作台</div>
-            <div class="section-subtitle">中间展示流式回复，右侧展示 tool、skill、检索步骤和任务表。</div>
+            <div class="section-subtitle">左侧保留对话流，右侧切换为真正的 trace 时间线视图。</div>
           </div>
           <div class="agent-header__actions">
             <el-select v-model="docId" clearable placeholder="可选：绑定 doc_id" class="glass-select agent-doc-select">
               <el-option v-for="d in docs" :key="d.doc_id" :label="`${d.doc_name} (${d.doc_id})`" :value="d.doc_id" />
             </el-select>
-            <el-button class="ghost-button" @click="loadDocs" :loading="docsLoading">刷新文档</el-button>
+            <el-button class="ghost-button" :loading="docsLoading" @click="loadDocs">刷新文档</el-button>
           </div>
         </div>
       </template>
@@ -59,8 +59,8 @@
           <div class="chat-window__hero">
             <div>
               <div class="eyebrow">Agent Stream</div>
-              <h3>流式回答 + 执行观测</h3>
-              <p>当前会话会同步展示 Agent 的思考阶段、tool 调用、skill 读取、检索步骤和证据摘要。</p>
+              <h3>流式回答 + Trace 可观测</h3>
+              <p>当前会话会同步展示 Agent 推理、Tool 调用、Skill 执行、检索命中与最终回答。</p>
             </div>
             <div class="chat-window__meta">
               <div class="hero-stat">
@@ -68,8 +68,8 @@
                 <strong>{{ runStatusLabel }}</strong>
               </div>
               <div class="hero-stat">
-                <span>任务数</span>
-                <strong>{{ currentRun.tasks.length }}</strong>
+                <span>Trace 步数</span>
+                <strong>{{ timelineSteps.length }}</strong>
               </div>
             </div>
           </div>
@@ -105,8 +105,8 @@
       <template #header>
         <div class="observe-header">
           <div>
-            <div class="section-title">执行观测</div>
-            <div class="section-subtitle">采用通用侧边栏方案，统一展示任务表、事件流和证据卡。</div>
+            <div class="section-title">执行 Trace</div>
+            <div class="section-subtitle">统一展示任务、过程、证据和 token 消耗，不再复用旧 tabs 布局。</div>
           </div>
           <el-tag :type="runStatusType" effect="light" round>{{ runStatusLabel }}</el-tag>
         </div>
@@ -139,60 +139,98 @@
         </div>
       </div>
 
-      <el-tabs v-model="activeObserveTab" class="observe-tabs">
-        <el-tab-pane label="任务表" name="tasks">
-          <div v-if="!currentRun.tasks.length" class="empty-state">本次会话还没有执行任务。</div>
-          <div v-else class="task-list">
-            <div v-for="task in currentRun.tasks" :key="task.id" class="task-item" :class="`is-${task.status}`">
-              <div class="task-item__head">
-                <div>
-                  <div class="task-item__title">{{ task.title }}</div>
-                  <div class="task-item__meta">{{ task.kind }} · {{ task.subtitle || '处理中' }}</div>
+      <div class="trace-shell">
+        <div class="trace-overview">
+          <div class="trace-overview__main">
+            <div class="trace-overview__label">Trace</div>
+            <div class="trace-overview__id mono">{{ currentRun.traceId || currentRun.id || 'pending-trace' }}</div>
+            <div class="trace-overview__meta">
+              <span>{{ timelineSteps.length }} steps</span>
+              <span>{{ traceCompletedCount }}/{{ timelineSteps.length || 0 }} completed</span>
+              <span v-if="currentRun.tracePath">path: {{ currentRun.tracePath }}</span>
+            </div>
+          </div>
+          <div class="trace-overview__side">
+            <div class="trace-overview__time">
+              <span v-if="currentRun.startedAt">{{ formatTime(currentRun.startedAt) }}</span>
+              <span v-if="currentRun.finishedAt">→ {{ formatTime(currentRun.finishedAt) }}</span>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="!timelineSteps.length" class="empty-state">发送问题后，这里会按时间线展示 Agent 的推理、工具调用、检索证据和最终回答。</div>
+
+        <div v-else class="trace-timeline">
+          <article
+            v-for="(step, idx) in timelineSteps"
+            :key="step.step_id || `${idx}-${step.title}`"
+            class="trace-card"
+            :class="`is-${traceTone(step.status)}`"
+          >
+            <div class="trace-card__rail">
+              <div class="trace-card__dot" :class="`is-${traceTone(step.status)}`">{{ idx + 1 }}</div>
+              <div v-if="idx < timelineSteps.length - 1" class="trace-card__line" />
+            </div>
+
+            <div class="trace-card__body">
+              <div class="trace-card__head">
+                <div class="trace-card__title-wrap">
+                  <div class="trace-card__eyebrow">
+                    <span>{{ traceKindLabel(step.kind) }}</span>
+                    <span v-if="step.event">{{ step.event }}</span>
+                  </div>
+                  <div class="trace-card__title">{{ step.title || step.step_name }}</div>
+                  <div class="trace-card__subtitle">{{ step.step_name || step.event || 'trace step' }}</div>
                 </div>
-                <el-tag :type="taskStatusType(task.status)" effect="light" round>{{ taskStatusLabel(task.status) }}</el-tag>
+                <el-tag :type="taskStatusType(step.status)" effect="light" round>{{ taskStatusLabel(step.status) }}</el-tag>
               </div>
-              <div class="task-usage">
-                <span class="task-usage__item">In {{ formatTokenNumber(task.usage?.inputTokens) }}</span>
-                <span class="task-usage__item">Out {{ formatTokenNumber(task.usage?.outputTokens) }}</span>
-                <span class="task-usage__item">Total {{ formatTokenNumber(task.usage?.totalTokens) }}</span>
-                <span v-if="task.usage?.isEstimated" class="task-usage__hint">估算</span>
-              </div>
-              <div v-if="task.detail" class="task-item__detail">{{ task.detail }}</div>
-            </div>
-          </div>
-        </el-tab-pane>
 
-        <el-tab-pane label="过程流" name="events">
-          <div v-if="!currentRun.events.length" class="empty-state">发送问题后，这里会出现 Agent 的执行过程。</div>
-          <div v-else class="event-list">
-            <div v-for="event in currentRun.events" :key="event.id" class="event-item">
-              <div class="event-item__dot" :class="`is-${event.tone}`" />
-              <div class="event-item__body">
-                <div class="event-item__title">{{ event.title }}</div>
-                <div v-if="event.description" class="event-item__desc">{{ event.description }}</div>
+              <div class="trace-card__meta">
+                <span v-if="step.updated_at">{{ formatTime(step.updated_at) }}</span>
+                <span v-if="step.latency_ms">{{ formatLatency(step.latency_ms) }}</span>
+                <span v-if="step.tokens?.totalTokens">tokens {{ formatTokenNumber(step.tokens.totalTokens) }}</span>
+                <span v-if="step.tokens?.inputTokens">in {{ formatTokenNumber(step.tokens.inputTokens) }}</span>
+                <span v-if="step.tokens?.outputTokens">out {{ formatTokenNumber(step.tokens.outputTokens) }}</span>
+                <span v-if="step.tokens?.isEstimated">estimated</span>
+              </div>
+
+              <div v-if="tracePrimaryText(step)" class="trace-card__desc">{{ tracePrimaryText(step) }}</div>
+              <div v-if="step.error?.message" class="trace-card__error">{{ step.error.message }}</div>
+
+              <div v-if="traceEvidenceItems(step).length" class="trace-card__section">
+                <div class="trace-card__section-title">Evidence</div>
+                <article
+                  v-for="(item, evidenceIndex) in traceEvidenceItems(step)"
+                  :key="`${step.step_id}-evidence-${evidenceIndex}`"
+                  class="trace-evidence-card"
+                >
+                  <div class="trace-evidence-card__head">
+                    <el-tag size="small" effect="plain">{{ item.mode || item.type || 'evidence' }}</el-tag>
+                    <span class="mono trace-evidence-card__meta">{{ item.document_name || item.doc_id || 'unknown-doc' }}</span>
+                  </div>
+                  <div class="trace-evidence-card__title">{{ item.entity_name || item.relation || item.chunk_id || 'evidence item' }}</div>
+                  <div class="trace-evidence-card__content">{{ item.text || summarizeEvidence(item) }}</div>
+                </article>
+              </div>
+
+              <div v-if="tracePayloadEntries(step).length" class="trace-card__section">
+                <div class="trace-card__section-title">Payload</div>
+                <div class="trace-payload-list">
+                  <div
+                    v-for="entry in tracePayloadEntries(step)"
+                    :key="`${step.step_id}-${entry.key}`"
+                    class="trace-payload-item"
+                  >
+                    <div class="trace-payload-item__key">{{ entry.key }}</div>
+                    <pre v-if="entry.multiline" class="trace-payload-item__value">{{ entry.value }}</pre>
+                    <div v-else class="trace-payload-item__value">{{ entry.value }}</div>
+                  </div>
+                </div>
               </div>
             </div>
-          </div>
-        </el-tab-pane>
-
-        <el-tab-pane label="证据卡" name="evidence">
-          <div v-if="!currentRun.evidence.length" class="empty-state">检索命中的文档片段会显示在这里。</div>
-          <div v-else class="evidence-list">
-            <article
-              v-for="(item, idx) in currentRun.evidence"
-              :key="`${idx}-${item.chunk_id || item.entity_name || item.relation}`"
-              class="evidence-card"
-            >
-              <div class="evidence-card__head">
-                <el-tag size="small" effect="plain">{{ item.mode || item.type || 'evidence' }}</el-tag>
-                <span class="mono evidence-card__meta">{{ item.document_name || item.doc_id || 'unknown-doc' }}</span>
-              </div>
-              <div class="evidence-card__title">{{ item.entity_name || item.relation || item.chunk_id || '检索命中' }}</div>
-              <div class="evidence-card__content">{{ item.text || summarizeEvidence(item) }}</div>
-            </article>
-          </div>
-        </el-tab-pane>
-      </el-tabs>
+          </article>
+        </div>
+      </div>
     </el-card>
   </div>
 </template>
@@ -215,7 +253,6 @@ const docId = ref('')
 const text = ref('')
 const sending = ref(false)
 const chatWindowEl = ref(null)
-const activeObserveTab = ref('tasks')
 
 const sessions = ref([])
 const activeSessionId = ref('')
@@ -226,12 +263,32 @@ const markdown = new MarkdownIt({
   breaks: true,
 })
 
-const scopeLabel = computed(() => (docId.value ? `分组 ${props.groupId} / 文档 ${docId.value}` : `分组 ${props.groupId} / 全局`))
+const scopeLabel = computed(() => (
+  docId.value
+    ? `分组 ${props.groupId} / 文档 ${docId.value}`
+    : `分组 ${props.groupId} / 全局`
+))
+
 const activeMessages = computed(() => activeSession.value?.messages || [])
+
 const currentRun = computed(() => {
   const runs = Array.isArray(activeSession.value?.runs) ? activeSession.value.runs : []
   const run = runs[0]
   if (!run) return createRunState()
+
+  const traceSteps = Array.isArray(run.traceSteps) ? run.traceSteps.map(normalizeTraceStep) : []
+  if (traceSteps.length) {
+    return {
+      ...createRunState(),
+      ...run,
+      traceSteps,
+      tasks: deriveTasksFromTrace(traceSteps),
+      events: deriveEventsFromTrace(traceSteps),
+      evidence: deriveEvidenceFromTrace(traceSteps),
+      usage: deriveUsageFromTrace(traceSteps),
+    }
+  }
+
   return {
     ...createRunState(),
     ...run,
@@ -239,10 +296,29 @@ const currentRun = computed(() => {
     tasks: Array.isArray(run.tasks)
       ? run.tasks.map((task) => ({ ...task, usage: createUsage(task?.usage || {}) }))
       : [],
+    events: Array.isArray(run.events) ? run.events : [],
+    evidence: Array.isArray(run.evidence) ? run.evidence : [],
+    traceSteps: [],
   }
 })
+
 const runStatusLabel = computed(() => runStatusText(currentRun.value.status))
 const runStatusType = computed(() => taskStatusType(currentRun.value.status))
+
+const timelineSteps = computed(() => {
+  if (currentRun.value.traceSteps.length) {
+    return [...currentRun.value.traceSteps].sort((a, b) => {
+      const timeA = new Date(a.updated_at || 0).getTime()
+      const timeB = new Date(b.updated_at || 0).getTime()
+      return timeA - timeB
+    })
+  }
+  return synthesizeTimelineFromRun(currentRun.value)
+})
+
+const traceCompletedCount = computed(() => (
+  timelineSteps.value.filter((step) => ['done', 'completed'].includes(normalizeTraceStatus(step.status))).length
+))
 
 function createRunState() {
   return {
@@ -250,6 +326,9 @@ function createRunState() {
     status: 'idle',
     startedAt: '',
     finishedAt: '',
+    traceId: '',
+    tracePath: '',
+    traceSteps: [],
     tasks: [],
     events: [],
     evidence: [],
@@ -263,6 +342,9 @@ function createRun(taskId = `${Date.now()}-${Math.random().toString(16).slice(2,
     status: 'running',
     startedAt: new Date().toISOString(),
     finishedAt: '',
+    traceId: '',
+    tracePath: '',
+    traceSteps: [],
     tasks: [],
     events: [],
     evidence: [],
@@ -289,6 +371,127 @@ function normalizeUsage(payload = {}) {
     isEstimated: Boolean(payload.is_estimated ?? payload.isEstimated),
     latencyMs: Number(payload.latency_ms ?? payload.latencyMs ?? 0) || 0,
   })
+}
+
+function normalizeTraceStatus(status) {
+  const value = String(status || '').trim().toLowerCase()
+  if (!value) return 'pending'
+  if (['done', 'completed', 'success', 'succeeded'].includes(value)) return 'completed'
+  if (['error', 'failed'].includes(value)) return 'failed'
+  if (['running', 'processing', 'active', 'in_progress'].includes(value)) return 'running'
+  return value
+}
+
+function normalizeTraceStep(step = {}) {
+  const payload = step?.payload && typeof step.payload === 'object' ? step.payload : {}
+  return {
+    ...step,
+    step_id: step.step_id || `${Date.now()}-${Math.random().toString(16).slice(2, 6)}`,
+    source: step.source || 'agent',
+    kind: step.kind || 'system',
+    event: step.event || 'trace',
+    step_name: step.step_name || step.title || step.event || 'trace',
+    title: step.title || step.step_name || step.event || 'trace',
+    status: normalizeTraceStatus(step.status),
+    updated_at: step.updated_at || step.ended_at || step.started_at || new Date().toISOString(),
+    latency_ms: Number(step.latency_ms || 0) || 0,
+    tokens: normalizeUsage(step.tokens || {}),
+    error: step.error || null,
+    payload,
+  }
+}
+
+function deriveTasksFromTrace(traceSteps = []) {
+  return traceSteps
+    .filter((step) => ['llm', 'tool', 'skill', 'retrieval', 'assistant', 'run'].includes(step.kind))
+    .map((step) => ({
+      id: step.step_id,
+      title: step.title || step.step_name,
+      kind: step.kind,
+      subtitle: step.step_name || step.event,
+      detail: tracePrimaryText(step),
+      status:
+        step.status === 'completed' ? 'done' :
+        step.status === 'failed' ? 'error' :
+        step.status === 'running' ? 'running' : 'pending',
+      usage: normalizeUsage(step.tokens || {}),
+    }))
+}
+
+function deriveEventsFromTrace(traceSteps = []) {
+  return traceSteps.slice(-120).map((step) => ({
+    id: step.step_id,
+    title: step.title || step.step_name,
+    description: tracePrimaryText(step),
+    tone: traceTone(step.status),
+  }))
+}
+
+function deriveEvidenceFromTrace(traceSteps = []) {
+  const items = []
+  for (const step of traceSteps) {
+    const previews = traceEvidenceItems(step)
+    if (previews.length) items.push(...previews)
+  }
+  return items.slice(0, 20)
+}
+
+function deriveUsageFromTrace(traceSteps = []) {
+  return traceSteps.reduce((acc, step) => {
+    const usage = normalizeUsage(step.tokens || {})
+    acc.inputTokens += usage.inputTokens
+    acc.outputTokens += usage.outputTokens
+    acc.totalTokens += usage.totalTokens
+    acc.latencyMs += Number(step.latency_ms || usage.latencyMs || 0) || 0
+    acc.isEstimated = acc.isEstimated || usage.isEstimated
+    return acc
+  }, createUsage())
+}
+
+function synthesizeTimelineFromRun(run) {
+  const steps = []
+
+  ;(run.tasks || []).forEach((task, index) => {
+    steps.push(normalizeTraceStep({
+      step_id: `legacy-task-${index}-${task.id || index}`,
+      kind: task.kind || 'task',
+      event: 'legacy.task',
+      title: task.title || '任务',
+      step_name: task.subtitle || task.kind || 'task',
+      status: task.status || 'pending',
+      updated_at: run.finishedAt || run.startedAt || new Date().toISOString(),
+      tokens: task.usage || {},
+      payload: { detail: task.detail || '' },
+    }))
+  })
+
+  ;(run.events || []).forEach((event, index) => {
+    steps.push(normalizeTraceStep({
+      step_id: `legacy-event-${index}-${event.id || index}`,
+      kind: 'event',
+      event: 'legacy.event',
+      title: event.title || '事件',
+      step_name: event.title || '事件',
+      status: event.tone === 'danger' ? 'failed' : event.tone === 'warning' ? 'running' : 'completed',
+      updated_at: run.finishedAt || run.startedAt || new Date().toISOString(),
+      payload: { description: event.description || '' },
+    }))
+  })
+
+  if ((run.evidence || []).length) {
+    steps.push(normalizeTraceStep({
+      step_id: `legacy-evidence-${run.id || 'run'}`,
+      kind: 'retrieval',
+      event: 'legacy.evidence',
+      title: '检索证据',
+      step_name: 'evidence',
+      status: 'completed',
+      updated_at: run.finishedAt || run.startedAt || new Date().toISOString(),
+      payload: { items_preview: run.evidence.slice(0, 10) },
+    }))
+  }
+
+  return steps
 }
 
 function cloneRun(run) {
@@ -331,7 +534,6 @@ function startNewSession() {
   activeSessionId.value = ''
   activeSession.value = createEphemeralSession({ groupId: props.groupId, docId: docId.value || '' })
   text.value = ''
-  activeObserveTab.value = 'tasks'
   nextTick(scrollToBottom)
 }
 
@@ -351,10 +553,12 @@ async function removeSession(sessionId) {
 
 function appendMessage(role, content, extra = {}) {
   const messages = [...(activeSession.value.messages || []), { role, content, ...extra }]
+  const nextTitle = activeSession.value.title === '新会话' && role === 'user'
+    ? String(content || '').trim().slice(0, 24) || '新会话'
+    : activeSession.value.title
+
   updateActiveSession({
-    title: activeSession.value.title === '新会话' && role === 'user'
-      ? String(content || '').trim().slice(0, 24) || '新会话'
-      : activeSession.value.title,
+    title: nextTitle,
     messages,
   })
   persistActiveSession()
@@ -396,7 +600,7 @@ function setRunStatus(status) {
   runs[0] = {
     ...runs[0],
     status,
-    finishedAt: ['done', 'error'].includes(status) ? new Date().toISOString() : runs[0].finishedAt,
+    finishedAt: ['done', 'error', 'completed', 'failed'].includes(status) ? new Date().toISOString() : runs[0].finishedAt,
   }
   updateActiveSession({ runs })
   persistActiveSession()
@@ -407,18 +611,15 @@ function createTask(id, title, kind, subtitle = '', detail = '') {
 }
 
 function recomputeRunUsage(tasks = []) {
-  return tasks.reduce(
-    (acc, task) => {
-      const usage = normalizeUsage(task?.usage || {})
-      acc.inputTokens += usage.inputTokens
-      acc.outputTokens += usage.outputTokens
-      acc.totalTokens += usage.totalTokens
-      acc.latencyMs += usage.latencyMs
-      acc.isEstimated = acc.isEstimated || usage.isEstimated
-      return acc
-    },
-    createUsage(),
-  )
+  return tasks.reduce((acc, task) => {
+    const usage = normalizeUsage(task?.usage || {})
+    acc.inputTokens += usage.inputTokens
+    acc.outputTokens += usage.outputTokens
+    acc.totalTokens += usage.totalTokens
+    acc.latencyMs += usage.latencyMs
+    acc.isEstimated = acc.isEstimated || usage.isEstimated
+    return acc
+  }, createUsage())
 }
 
 function upsertRunTask(taskPatch) {
@@ -427,14 +628,17 @@ function upsertRunTask(taskPatch) {
   const run = cloneRun(runs[0])
   const tasks = Array.isArray(run.tasks) ? [...run.tasks] : []
   const index = tasks.findIndex((item) => item.id === taskPatch.id)
+
   if (index >= 0) {
     tasks[index] = {
       ...tasks[index],
       ...taskPatch,
       usage: normalizeUsage(taskPatch.usage ?? tasks[index].usage ?? {}),
     }
+  } else {
+    tasks.unshift({ ...taskPatch, usage: normalizeUsage(taskPatch.usage || {}) })
   }
-  else tasks.unshift({ ...taskPatch, usage: normalizeUsage(taskPatch.usage || {}) })
+
   run.tasks = tasks
   run.usage = recomputeRunUsage(tasks)
   runs[0] = run
@@ -481,22 +685,22 @@ function scrollToBottom() {
 }
 
 function taskStatusType(status) {
-  if (status === 'done') return 'success'
-  if (status === 'error') return 'danger'
+  if (['done', 'completed'].includes(status)) return 'success'
+  if (['error', 'failed'].includes(status)) return 'danger'
   if (status === 'running') return 'warning'
   return 'info'
 }
 
 function taskStatusLabel(status) {
-  if (status === 'done') return '已完成'
-  if (status === 'error') return '失败'
+  if (['done', 'completed'].includes(status)) return '已完成'
+  if (['error', 'failed'].includes(status)) return '失败'
   if (status === 'running') return '执行中'
   return '待处理'
 }
 
 function runStatusText(status) {
-  if (status === 'done') return '回答完成'
-  if (status === 'error') return '运行失败'
+  if (['done', 'completed'].includes(status)) return '回答完成'
+  if (['error', 'failed'].includes(status)) return '运行失败'
   if (status === 'running') return '执行中'
   return '等待提问'
 }
@@ -512,6 +716,20 @@ function formatTokenNumber(value) {
   return num.toLocaleString('zh-CN')
 }
 
+function formatTime(value) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return String(value)
+  return date.toLocaleString('zh-CN', { hour12: false })
+}
+
+function formatLatency(value) {
+  const ms = Number(value || 0)
+  if (!ms) return ''
+  if (ms < 1000) return `${Math.round(ms)} ms`
+  return `${(ms / 1000).toFixed(2)} s`
+}
+
 function summarizeEvidence(item) {
   return item?.raw ? JSON.stringify(item.raw).slice(0, 180) : '暂无摘要'
 }
@@ -520,28 +738,122 @@ function renderMarkdown(content) {
   return markdown.render(String(content || ''))
 }
 
+function traceTone(status) {
+  const normalized = normalizeTraceStatus(status)
+  if (normalized === 'completed') return 'success'
+  if (normalized === 'failed') return 'danger'
+  if (normalized === 'running') return 'warning'
+  return 'info'
+}
+
+function traceKindLabel(kind) {
+  const map = {
+    llm: 'LLM',
+    tool: 'Tool',
+    skill: 'Skill',
+    retrieval: 'Retrieval',
+    assistant: 'Assistant',
+    run: 'Run',
+    event: 'Event',
+    system: 'System',
+    agent: 'Agent',
+  }
+  return map[kind] || String(kind || 'Trace')
+}
+
+function tracePrimaryText(step) {
+  return [
+    step?.error?.message,
+    step?.payload?.message,
+    step?.payload?.content_preview,
+    step?.payload?.reply,
+    step?.payload?.query,
+    step?.payload?.description,
+    step?.payload?.detail,
+  ].find(Boolean) || ''
+}
+
+function traceEvidenceItems(step) {
+  const items = step?.payload?.items_preview || step?.payload?.items || []
+  return Array.isArray(items) ? items.slice(0, 6) : []
+}
+
+function tracePayloadEntries(step) {
+  const payload = step?.payload && typeof step.payload === 'object' ? step.payload : {}
+  const skipKeys = new Set(['items', 'items_preview', 'reply', 'content', 'content_preview', 'message', 'detail', 'description', 'delta'])
+
+  return Object.entries(payload)
+    .filter(([key, value]) => !skipKeys.has(key) && value !== undefined && value !== null && value !== '')
+    .slice(0, 10)
+    .map(([key, value]) => {
+      if (typeof value === 'object') {
+        const rendered = JSON.stringify(value, null, 2)
+        return { key, value: rendered, multiline: true }
+      }
+      const rendered = String(value)
+      return { key, value: rendered, multiline: rendered.length > 120 || rendered.includes('\n') }
+    })
+}
+
+function handleTraceEventPayload(step, payload) {
+  if (step.event === 'assistant.start') {
+    appendMessage('assistant', '', { streaming: true })
+    return
+  }
+
+  if (step.event === 'assistant.chunk') {
+    updateLastAssistant(step.payload?.delta || '', false)
+    return
+  }
+
+  if (step.event === 'assistant.done' || step.event === 'done') {
+    finalizeLastAssistant(step.payload?.content || step.payload?.reply || payload?.content || '')
+    setRunStatus('done')
+    return
+  }
+
+  if (step.status === 'failed' && (step.kind === 'assistant' || step.event === 'trace.ready')) {
+    setRunStatus('error')
+  }
+}
+
 function handleAgentEvent(eventName, payload) {
+  if (eventName === 'trace' && payload?.step) {
+    const step = normalizeTraceStep({
+      ...payload.step,
+      trace_id: payload.trace_id || payload.step?.trace_id,
+      payload: { ...(payload.step?.payload || {}), ...(payload.payload || {}) },
+    })
+    upsertTraceStep(step)
+    handleTraceEventPayload(step, payload)
+    return
+  }
+
   const event = payload && typeof payload === 'object' ? payload : { raw: payload }
 
   switch (eventName) {
     case 'run.start':
-      appendRunEvent({ title: '已开始执行', description: 'Agent 已接收问题并开始规划。', tone: 'info' })
+      appendRunEvent({ title: '开始执行', description: 'Agent 已接收问题并开始规划。', tone: 'info' })
       break
     case 'agent.think.start':
-      upsertRunTask(
-        createTask(
-          event.task_id || `agent-think:${Date.now()}`,
-          'Agent 推理',
-          'agent',
-          event.model_name || 'LLM',
-          `messages=${event.message_count || 0}`,
-        ),
-      )
+      upsertRunTask(createTask(
+        event.task_id || `agent-think:${Date.now()}`,
+        'Agent 推理',
+        'agent',
+        event.model_name || 'LLM',
+        `messages=${event.message_count || 0}`,
+      ))
       appendRunEvent({ title: '模型开始推理', description: `输入消息数：${event.message_count || 0}`, tone: 'warning' })
       break
     case 'agent.tool_calls':
       ;(event.tool_calls || []).forEach((call, index) => {
-        upsertRunTask(createTask(call.id || `${call.name}-${index}`, call.name || 'tool', 'tool', '等待执行', JSON.stringify(call.args || {}, null, 2)))
+        upsertRunTask(createTask(
+          call.id || `${call.name}-${index}`,
+          call.name || 'tool',
+          'tool',
+          '等待执行',
+          JSON.stringify(call.args || {}, null, 2),
+        ))
       })
       appendRunEvent({
         title: '模型规划了工具调用',
@@ -552,7 +864,6 @@ function handleAgentEvent(eventName, payload) {
     case 'tool.start':
       upsertRunTask(createTask(`tool:${event.tool_name}`, event.tool_name || 'tool', 'tool', '开始执行', event.query || event.group_id || ''))
       appendRunEvent({ title: `开始执行 ${event.tool_name}`, description: event.query || '', tone: 'warning' })
-      activeObserveTab.value = 'tasks'
       break
     case 'tool.end':
       upsertRunTask({
@@ -563,10 +874,7 @@ function handleAgentEvent(eventName, payload) {
         detail: event.content_preview || '',
         status: 'done',
       })
-      if (Array.isArray(event.items_preview) && event.items_preview.length) {
-        setRunEvidence(event.items_preview)
-        activeObserveTab.value = 'evidence'
-      }
+      if (Array.isArray(event.items_preview) && event.items_preview.length) setRunEvidence(event.items_preview)
       appendRunEvent({
         title: `${event.tool_name} 执行完成`,
         description: `steps=${event.steps ?? 0}，items=${event.items ?? 0}，errors=${event.errors ?? 0}`,
@@ -674,7 +982,6 @@ function handleAgentEvent(eventName, payload) {
       break
     case 'assistant.start':
       appendMessage('assistant', '', { streaming: true })
-      activeObserveTab.value = 'events'
       break
     case 'assistant.chunk':
       updateLastAssistant(event.delta || '', false)
@@ -700,6 +1007,39 @@ function handleAgentEvent(eventName, payload) {
   }
 }
 
+function upsertTraceStep(rawStep) {
+  const runs = Array.isArray(activeSession.value.runs) ? [...activeSession.value.runs] : []
+  if (!runs.length) return
+  const run = cloneRun(runs[0])
+  const traceSteps = Array.isArray(run.traceSteps) ? [...run.traceSteps] : []
+  const step = normalizeTraceStep(rawStep)
+  const index = traceSteps.findIndex((item) => item.step_id === step.step_id)
+
+  if (index >= 0) {
+    traceSteps[index] = { ...traceSteps[index], ...step }
+  } else {
+    traceSteps.push(step)
+  }
+
+  run.traceSteps = traceSteps.slice(-300)
+  if (step.trace_id) run.traceId = step.trace_id
+  if (step.payload?.trace_path) run.tracePath = step.payload.trace_path
+
+  if (step.status === 'failed') {
+    run.status = 'failed'
+    run.finishedAt = new Date().toISOString()
+  } else if (['done', 'trace.ready', 'assistant.done'].includes(step.event) && step.status === 'completed') {
+    run.status = 'completed'
+    run.finishedAt = new Date().toISOString()
+  } else if (run.status === 'idle') {
+    run.status = 'running'
+  }
+
+  runs[0] = run
+  updateActiveSession({ runs })
+  persistActiveSession()
+}
+
 async function loadDocs() {
   docsLoading.value = true
   try {
@@ -718,7 +1058,6 @@ async function send() {
   text.value = ''
   sending.value = true
   startRun()
-  activeObserveTab.value = 'tasks'
 
   try {
     await postEventStream(
@@ -758,7 +1097,7 @@ onMounted(async () => {
 <style scoped>
 .agent-workbench {
   display: grid;
-  grid-template-columns: 260px minmax(780px, 1.7fr) minmax(320px, 0.72fr);
+  grid-template-columns: 260px minmax(780px, 1.7fr) minmax(360px, 0.82fr);
   gap: 16px;
   align-items: start;
 }
@@ -888,8 +1227,7 @@ onMounted(async () => {
   gap: 16px;
   padding: 20px;
   border-radius: 22px;
-  background:
-    linear-gradient(135deg, #173548 0%, #24596b 58%, #f6efe3 58%, #fcfaf6 100%);
+  background: linear-gradient(135deg, #173548 0%, #24596b 58%, #f6efe3 58%, #fcfaf6 100%);
   color: #eff7fb;
 }
 
@@ -1141,134 +1479,263 @@ onMounted(async () => {
   background: linear-gradient(180deg, rgba(16, 62, 82, 0.12), rgba(16, 62, 82, 0.05));
 }
 
-.observe-tabs :deep(.el-tabs__content) {
-  padding-top: 6px;
+.trace-shell {
+  display: grid;
+  gap: 14px;
 }
 
-.task-list,
-.event-list,
-.evidence-list {
+.trace-overview {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
-  max-height: 640px;
+  padding: 16px;
+  border: 1px solid rgba(20, 48, 61, 0.08);
+  border-radius: 20px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(246, 248, 250, 0.95));
+}
+
+.trace-overview__label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+}
+
+.trace-overview__id {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--brand-strong);
+  word-break: break-all;
+}
+
+.trace-overview__meta,
+.trace-overview__time {
+  margin-top: 10px;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--text-sub);
+}
+
+.trace-overview__side {
+  display: grid;
+  align-content: space-between;
+  justify-items: end;
+}
+
+.trace-timeline {
+  display: grid;
+  gap: 14px;
+  max-height: 840px;
   overflow: auto;
   padding-right: 4px;
 }
 
-.task-item,
-.evidence-card {
-  padding: 14px 16px;
-  border-radius: 18px;
+.trace-card {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.trace-card__rail {
+  display: grid;
+  justify-items: center;
+  align-self: stretch;
+}
+
+.trace-card__dot {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+  background: #7c95a5;
+  box-shadow: 0 10px 18px rgba(19, 37, 50, 0.12);
+}
+
+.trace-card__dot.is-success {
+  background: #1f9d55;
+}
+
+.trace-card__dot.is-warning {
+  background: #d99100;
+}
+
+.trace-card__dot.is-danger {
+  background: #cc3d3d;
+}
+
+.trace-card__line {
+  width: 2px;
+  flex: 1 1 auto;
+  min-height: 52px;
+  margin-top: 6px;
+  background: linear-gradient(180deg, rgba(29, 92, 99, 0.24), rgba(29, 92, 99, 0.06));
+}
+
+.trace-card__body {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border-radius: 20px;
   border: 1px solid rgba(20, 48, 61, 0.08);
-  background: rgba(255, 255, 255, 0.94);
+  background: rgba(255, 255, 255, 0.96);
 }
 
-.task-item.is-running {
-  border-color: rgba(194, 134, 41, 0.28);
+.trace-card.is-success .trace-card__body {
+  border-color: rgba(31, 157, 85, 0.22);
 }
 
-.task-item.is-done {
-  border-color: rgba(59, 143, 104, 0.24);
+.trace-card.is-warning .trace-card__body {
+  border-color: rgba(217, 145, 0, 0.22);
 }
 
-.task-item.is-error {
-  border-color: rgba(188, 78, 82, 0.24);
+.trace-card.is-danger .trace-card__body {
+  border-color: rgba(204, 61, 61, 0.22);
 }
 
-.task-item__head {
+.trace-card__head {
   display: flex;
   justify-content: space-between;
   gap: 12px;
 }
 
-.task-item__title {
-  font-weight: 700;
-  color: var(--brand-strong);
+.trace-card__title-wrap {
+  min-width: 0;
 }
 
-.task-item__meta,
-.task-item__detail,
-.event-item__desc,
-.evidence-card__content {
-  margin-top: 6px;
-  font-size: 13px;
-  line-height: 1.65;
+.trace-card__eyebrow {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+}
+
+.trace-card__title {
+  margin-top: 4px;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--brand-strong);
+  line-height: 1.4;
+}
+
+.trace-card__subtitle {
+  margin-top: 4px;
+  font-size: 12px;
   color: var(--text-sub);
+}
+
+.trace-card__meta {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--text-sub);
+}
+
+.trace-card__desc,
+.trace-evidence-card__content,
+.trace-payload-item__value {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-main);
   white-space: pre-wrap;
   word-break: break-word;
 }
 
-.task-usage {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 10px;
-}
-
-.task-usage__item,
-.task-usage__hint {
-  padding: 4px 10px;
-  border-radius: 999px;
+.trace-card__error {
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: #fff1f1;
+  border: 1px solid #ffd7d7;
+  color: #9c2323;
   font-size: 12px;
-  line-height: 1.4;
-  background: rgba(17, 40, 55, 0.06);
-  color: var(--text-sub);
+  line-height: 1.6;
 }
 
-.task-usage__hint {
-  background: rgba(194, 134, 41, 0.14);
-  color: #8b5b11;
-}
-
-.event-item {
+.trace-card__section {
   display: grid;
-  grid-template-columns: 10px minmax(0, 1fr);
-  gap: 12px;
-  align-items: start;
-  padding: 8px 2px;
+  gap: 10px;
 }
 
-.event-item__dot {
-  width: 10px;
-  height: 10px;
-  margin-top: 6px;
-  border-radius: 999px;
-  background: #8aa0af;
-}
-
-.event-item__dot.is-success {
-  background: var(--success);
-}
-
-.event-item__dot.is-warning {
-  background: var(--warning);
-}
-
-.event-item__dot.is-danger {
-  background: var(--danger);
-}
-
-.event-item__title {
+.trace-card__section-title {
+  font-size: 12px;
   font-weight: 700;
-  color: var(--text-main);
+  color: #4f6674;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
-.evidence-card__head {
+.trace-evidence-card {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(20, 48, 61, 0.08);
+  background: linear-gradient(180deg, rgba(251, 252, 253, 0.98), rgba(246, 248, 250, 0.94));
+}
+
+.trace-evidence-card__head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
 }
 
-.evidence-card__meta {
+.trace-evidence-card__meta {
   font-size: 11px;
   color: var(--text-faint);
 }
 
-.evidence-card__title {
-  margin-top: 10px;
+.trace-evidence-card__title {
   font-weight: 700;
   color: var(--brand-strong);
+}
+
+.trace-payload-list {
+  display: grid;
+  gap: 8px;
+}
+
+.trace-payload-item {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: #f7fafc;
+  border: 1px solid #dde7ee;
+}
+
+.trace-payload-item__key {
+  font-size: 12px;
+  font-weight: 700;
+  color: #4d6674;
+}
+
+.trace-payload-item__value {
+  margin: 0;
+  font-family: Consolas, 'Courier New', monospace;
+}
+
+.mono {
+  font-family: Consolas, 'Courier New', monospace;
+}
+
+.empty-state {
+  padding: 24px;
+  border-radius: 18px;
+  border: 1px dashed rgba(20, 48, 61, 0.14);
+  background: rgba(247, 250, 252, 0.92);
+  color: var(--text-sub);
+  text-align: center;
 }
 
 @media (max-width: 1680px) {
@@ -1278,10 +1745,6 @@ onMounted(async () => {
 
   .observe-panel {
     grid-column: 1 / -1;
-  }
-
-  .observe-summary {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
@@ -1297,7 +1760,8 @@ onMounted(async () => {
     grid-template-columns: 1fr;
   }
 
-  .chat-window__hero {
+  .chat-window__hero,
+  .trace-overview {
     grid-template-columns: 1fr;
   }
 
@@ -1319,6 +1783,23 @@ onMounted(async () => {
 
   .chat-compose__actions {
     flex-direction: column;
+  }
+
+  .trace-card {
+    grid-template-columns: 1fr;
+  }
+
+  .trace-card__rail {
+    grid-auto-flow: column;
+    justify-content: start;
+    gap: 8px;
+  }
+
+  .trace-card__line {
+    width: 32px;
+    height: 2px;
+    min-height: 0;
+    margin-top: 13px;
   }
 }
 </style>

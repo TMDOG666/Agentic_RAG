@@ -11,6 +11,7 @@ from langgraph.prebuilt import ToolNode, tools_condition
 
 from agent.telemetry import emit_event
 from agent.token_usage import estimate_message_tokens, estimate_text_tokens, extract_usage_metadata
+from grag.observability import get_current_trace_recorder
 
 
 def create_system_prompt(skill_manager) -> str:
@@ -45,11 +46,26 @@ def build_graph(*, model, tools, system_prompt: str):
     def agent_node(state: MessagesState):
         bound_model = model.bind_tools(tools)
         invocation_id = f"agent-think:{uuid.uuid4().hex[:10]}"
+        recorder = get_current_trace_recorder()
         request_messages = [
             {"role": "system", "content": system_prompt},
             *state["messages"],
         ]
         started_at = time.perf_counter()
+        if recorder is not None:
+            recorder.start_invocation(
+                kind="llm",
+                name="agent.think",
+                invocation_id=invocation_id,
+                input_payload={
+                    "message_count": len(state["messages"]),
+                    "messages_preview": [str(getattr(message, "content", "") or message)[:240] for message in state["messages"][-4:]],
+                },
+                metadata={
+                    "model_name": getattr(model, "model_name", None) or getattr(model, "model", None),
+                    "provider": getattr(model, "openai_api_base", None) or getattr(model, "base_url", None),
+                },
+            )
         emit_event(
             "agent.think.start",
             {
@@ -101,6 +117,25 @@ def build_graph(*, model, tools, system_prompt: str):
                     "latency_ms": round((time.perf_counter() - started_at) * 1000, 2),
                 },
             )
+            if recorder is not None:
+                recorder.finish_invocation(
+                    invocation_id,
+                    status="completed",
+                    output_payload={
+                        "content_preview": str(getattr(response, "content", "") or "")[:1000],
+                        "tool_calls": tool_calls,
+                    },
+                    usage={
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                        "total_tokens": total_tokens,
+                        "usage_source": usage["source"],
+                        "is_estimated": usage["source"] == "estimated",
+                    },
+                    metadata={
+                        "latency_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                    },
+                )
 
             emit_event(
                 "agent.think.end",
@@ -117,6 +152,18 @@ def build_graph(*, model, tools, system_prompt: str):
             import traceback
 
             traceback.print_exc()
+            if recorder is not None:
+                recorder.finish_invocation(
+                    invocation_id,
+                    status="failed",
+                    error={
+                        "error_type": type(exc).__name__,
+                        "message": str(exc),
+                    },
+                    metadata={
+                        "latency_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                    },
+                )
             emit_event("agent.error", {"error": str(exc)})
             raise
 

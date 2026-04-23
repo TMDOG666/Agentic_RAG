@@ -1,21 +1,14 @@
-"""检索计划模块。
-
-负责：
-- 解析对话中的 RAG 上下文
-- 定义检索计划 schema
-- 校验 plan_json
-- 把计划步骤转换成脚本参数
-- 执行多步检索
-- 统一归一化结果并去重
-"""
+"""检索计划执行模块。"""
 
 from __future__ import annotations
 
 import json
 import re
+import uuid
 from typing import Any
 
 from agent.telemetry import emit_event
+from grag.observability import get_current_trace_recorder
 
 
 RAG_CONTEXT_RE = re.compile(
@@ -31,6 +24,60 @@ ALLOWED_MODES = {
     "relations_by_entities",
     "entities_by_relations",
 }
+
+
+def _start_invocation(
+    *,
+    kind: str,
+    name: str,
+    input_payload: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> str | None:
+    recorder = get_current_trace_recorder()
+    if recorder is None:
+        return None
+    invocation_id = f"{kind}:{name}:{uuid.uuid4().hex[:10]}"
+    recorder.start_invocation(
+        kind=kind,
+        name=name,
+        invocation_id=invocation_id,
+        input_payload=input_payload or {},
+        metadata=metadata or {},
+    )
+    return invocation_id
+
+
+def _finish_invocation(
+    invocation_id: str | None,
+    *,
+    status: str = "completed",
+    output_payload: dict[str, Any] | None = None,
+    error: Exception | None = None,
+    error_message: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    if invocation_id is None:
+        return
+    recorder = get_current_trace_recorder()
+    if recorder is None:
+        return
+    if error is not None or error_message:
+        recorder.finish_invocation(
+            invocation_id,
+            status="failed" if status == "completed" else status,
+            error={
+                "error_type": type(error).__name__ if error is not None else "RuntimeError",
+                "message": str(error) if error is not None else str(error_message or ""),
+            },
+            metadata=metadata or {},
+        )
+        return
+    recorder.finish_invocation(
+        invocation_id,
+        status=status,
+        output_payload=output_payload or {},
+        metadata=metadata or {},
+    )
 
 
 def extract_rag_context(text: str) -> tuple[str, str, str]:
@@ -251,6 +298,11 @@ def _script_name_for_mode(mode: str) -> str:
     return f"scripts/{mode}.py"
 
 
+def _looks_like_error_text(raw_text: str) -> bool:
+    text = str(raw_text or "").lstrip()
+    return text.startswith("❌") or text.startswith("错误") or text.startswith("Error:")
+
+
 def execute_retrieval_plan(
     *,
     skill_manager: Any,
@@ -264,8 +316,21 @@ def execute_retrieval_plan(
     effective_doc_id = (doc_id or inferred_doc_id).strip()
     effective_query = clean_query or str(query or "").strip()
 
+    plan_invocation_id = _start_invocation(
+        kind="retrieval_plan",
+        name="execute_retrieval_plan",
+        input_payload={
+            "query": effective_query,
+            "group_id": effective_group_id,
+            "doc_id": effective_doc_id,
+            "plan_preview": str(plan_json or "")[:1200],
+        },
+    )
+
     if not effective_group_id:
-        raise ValueError("缺少 group_id")
+        message = "缺少 group_id"
+        _finish_invocation(plan_invocation_id, error_message=message)
+        raise ValueError(message)
 
     plan = parse_plan(plan_json)
     emit_event(
@@ -283,14 +348,27 @@ def execute_retrieval_plan(
     errors: list[dict[str, Any]] = []
 
     for index, step in enumerate(plan["steps"], start=1):
+        step_invocation_id = _start_invocation(
+            kind="retrieval_step",
+            name=f"plan_step_{index}",
+            input_payload={
+                "step": index,
+                "step_payload": step,
+                "group_id": effective_group_id,
+                "doc_id": effective_doc_id,
+                "query": effective_query,
+            },
+        )
         if not isinstance(step, dict):
-            errors.append({"step": index, "error": "step 必须是对象"})
-            emit_event("retrieval.step.error", {"step": index, "error": "step 必须是对象"})
+            error_text = "step 必须是对象"
+            errors.append({"step": index, "error": error_text})
+            emit_event("retrieval.step.error", {"step": index, "error": error_text})
+            _finish_invocation(step_invocation_id, error_message=error_text)
             continue
 
         mode = str(step.get("mode", "")).strip()
         label = str(step.get("label") or f"step_{index}").strip()
-        step_query = step.get("query") or effective_query
+        step_query = str(step.get("query") or effective_query or "").strip()
         emit_event(
             "retrieval.step.start",
             {
@@ -309,29 +387,47 @@ def execute_retrieval_plan(
                 default_query=effective_query,
                 step=step,
             )
+
+            script_invocation_id = _start_invocation(
+                kind="retrieval_script",
+                name=mode,
+                input_payload={
+                    "step": index,
+                    "mode": mode,
+                    "label": label,
+                    "script_name": script_name,
+                    "script_args": script_args,
+                },
+            )
             raw = skill_manager.execute_skill_script("rag-retrieval", script_name, script_args)
-            raw_text = str(raw).lstrip()
-            if raw_text.startswith("❌") or raw_text.startswith("错误"):
-                errors.append({"step": index, "mode": mode, "error": str(raw)})
+            raw_text = str(raw or "")
+            if _looks_like_error_text(raw_text):
+                errors.append({"step": index, "mode": mode, "error": raw_text})
                 emit_event(
                     "retrieval.step.error",
-                    {"step": index, "mode": mode, "label": label, "error": str(raw)},
+                    {"step": index, "mode": mode, "label": label, "error": raw_text},
                 )
+                _finish_invocation(
+                    script_invocation_id,
+                    status="failed",
+                    error_message=raw_text,
+                    metadata={"step": index, "mode": mode, "label": label},
+                )
+                _finish_invocation(step_invocation_id, status="failed", error_message=raw_text)
                 continue
 
-            payload = json.loads((raw or "").strip())
+            payload = json.loads(raw_text.strip())
             items = normalize_items(payload, mode=mode, label=label)
             merged_items.extend(items)
-            step_outputs.append(
-                {
-                    "step": index,
-                    "label": label,
-                    "mode": mode,
-                    "query": step_query,
-                    "items": items,
-                    "raw_count": len(items),
-                }
-            )
+            step_output = {
+                "step": index,
+                "label": label,
+                "mode": mode,
+                "query": step_query,
+                "items": items,
+                "raw_count": len(items),
+            }
+            step_outputs.append(step_output)
             emit_event(
                 "retrieval.step.end",
                 {
@@ -342,12 +438,35 @@ def execute_retrieval_plan(
                     "raw_count": len(items),
                 },
             )
+            _finish_invocation(
+                script_invocation_id,
+                status="completed",
+                output_payload={
+                    "step": index,
+                    "mode": mode,
+                    "label": label,
+                    "raw_count": len(items),
+                    "raw_preview": raw_text[:1200],
+                },
+            )
+            _finish_invocation(
+                step_invocation_id,
+                status="completed",
+                output_payload={
+                    "step": index,
+                    "mode": mode,
+                    "label": label,
+                    "item_count": len(items),
+                    "items_preview": items[:5],
+                },
+            )
         except Exception as exc:
             errors.append({"step": index, "mode": mode, "error": str(exc)})
             emit_event(
                 "retrieval.step.error",
                 {"step": index, "mode": mode, "label": label, "error": str(exc)},
             )
+            _finish_invocation(step_invocation_id, error=exc, metadata={"step": index, "mode": mode, "label": label})
 
     deduped_items = dedupe_items(merged_items)
     return_limit = int(plan.get("return_limit", 12))
@@ -366,6 +485,16 @@ def execute_retrieval_plan(
             "step_count": len(step_outputs),
             "item_count": len(result["items"]),
             "error_count": len(errors),
+        },
+    )
+    _finish_invocation(
+        plan_invocation_id,
+        status="completed",
+        output_payload={
+            "step_count": len(step_outputs),
+            "item_count": len(result["items"]),
+            "error_count": len(errors),
+            "items_preview": result["items"][:8],
         },
     )
     return result

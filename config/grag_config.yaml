@@ -15,7 +15,7 @@
 # ============================================================================
 
 # 默认使用的 LLM 提供商（必须存在于 llm_providers 下）
-llm_provider: siliconflow
+llm_provider: miniMax
 
 # 默认使用的向量嵌入模型提供商（必须存在于 embedding_providers 下）
 embedding_provider: vllm
@@ -24,7 +24,7 @@ embedding_provider: vllm
 reranker_provider: vllm
 
 # 默认使用的视觉模型提供商（用于 OCR / 图像理解；必须存在于 vision_providers 下）
-vision_provider: minimax
+vision_provider: vllm
 
 # 默认使用的向量数据库（必须存在于 vector_databases 下）
 vector_db_provider: milvus
@@ -88,7 +88,7 @@ llm_providers:
 
   vllm:
     model: Qwen3-Next-80B-A3B
-    base_url: http://192.168.1.220:8000/v1
+    base_url: http://192.168.1.220:8001/v1
     api_key_env: OPENAI_API_KEY
     temperature: 0.1
     max_tokens: 40960
@@ -142,7 +142,7 @@ vision_providers:
 
   vllm:
     model: Qwen3-Next-80B-A3B
-    base_url: http://192.168.1.220:8000/v1
+    base_url: http://192.168.1.220:8001/v1
     api_key_env: OPENAI_API_KEY
     temperature: 0.1
     max_tokens: 40960

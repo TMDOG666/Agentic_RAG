@@ -10,9 +10,10 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, Iterator, List, Optional
- 
+
 from ..config import get_config_manager
 from grag.monitoring.logger import get_logger
+from grag.observability import get_current_trace_recorder
  
  
 logger = get_logger(__name__)
@@ -104,7 +105,11 @@ class MonitoringManager:
         step = str(step or "").strip() or "unknown"
         if len(self.results) >= self._max_result_items and step not in self.results:
             return
-        self.results[step] = self._sanitize_result(payload)
+        sanitized = self._sanitize_result(payload)
+        self.results[step] = sanitized
+        recorder = get_current_trace_recorder()
+        if recorder is not None:
+            recorder.record_result(step=step, payload=sanitized)
  
     def _sanitize_result(self, payload: Any) -> Any:
         try:
@@ -152,9 +157,11 @@ class MonitoringManager:
         merged_attrs = {**self.base_attrs, **attrs}
         start = time.perf_counter()
         start_ts = time.time()
+        span_failed = False
         try:
             yield merged_attrs
         except Exception as e:
+            span_failed = True
             self.inc(f"{name}.exceptions", 1)
             self.add_error(f"{name}: {type(e).__name__}: {e}")
             raise
@@ -178,6 +185,14 @@ class MonitoringManager:
                 dur_ms,
                 json.dumps(merged_attrs, ensure_ascii=False, default=str),
             )
+            recorder = get_current_trace_recorder()
+            if recorder is not None:
+                recorder.record_span(
+                    name=name,
+                    duration_ms=dur_ms,
+                    attrs=merged_attrs,
+                    status="failed" if span_failed else "completed",
+                )
  
     def to_dict(self) -> Dict[str, Any]:
         return {

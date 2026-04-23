@@ -62,6 +62,30 @@ class GraphBuildResult:
     relation_alignments: List[RelationAlignmentRecord]
 
 
+@dataclass(frozen=True)
+class GraphBuildPreparation:
+    final_doc_id: str
+    existing_chunks: List[ChunkRecord]
+    restored_chunks: List[ChunkExtractionParsed]
+    pipeline_map: Dict[str, GraphPipelineCheckpointRecord]
+    total_chunk_count: int
+
+
+@dataclass(frozen=True)
+class GraphAssetBundle:
+    document: DocumentRecord
+    chunks: List[ChunkRecord]
+    embeddings: List[ChunkEmbeddingRecord]
+    entities: List[GraphEntityRecord]
+    relations: List[GraphRelationRecord]
+    entity_mentions: List[EntityMentionRecord]
+    relation_mentions: List[RelationMentionRecord]
+    global_entities: List[GlobalEntityRecord]
+    entity_alignments: List[EntityAlignmentRecord]
+    global_relations: List[GlobalRelationRecord]
+    relation_alignments: List[RelationAlignmentRecord]
+
+
 class GraphBuilder:
     def __init__(
         self,
@@ -133,36 +157,15 @@ class GraphBuilder:
         progress_callback: Optional[Callable[[GraphConstructionStreamEvent], None]] = None,
         stream_base: bool = False,
     ) -> GraphBuildResult:
-        final_doc_id = str(doc_id or uuid4().hex)
-        active_stage = "chunk_resume"
-        existing_chunks = list(
-            self._storage.list_doc_chunks(group_id=group_id, doc_id=final_doc_id, limit=200000)
-        )
-        checkpoint_rows = list(
-            self._storage.list_graph_chunk_checkpoints(group_id=group_id, doc_id=final_doc_id)
-        )
-        pipeline_rows = list(
-            self._storage.list_graph_pipeline_checkpoints(group_id=group_id, doc_id=final_doc_id)
-        )
-        restored_chunks = self._restore_completed_chunks(
-            checkpoints=checkpoint_rows,
+        preparation = self._prepare_graph_build(
+            text=text,
+            doc_time=doc_time,
+            doc_name=doc_name,
             group_id=group_id,
-            doc_id=final_doc_id,
-            chunks=existing_chunks,
+            doc_id=doc_id,
         )
-        pipeline_map = {row.stage: row for row in pipeline_rows}
-        total_chunk_count = len(existing_chunks)
-
-        if not existing_chunks:
-            base = self.build_base_and_save(
-                text=text,
-                doc_time=doc_time,
-                doc_name=doc_name,
-                group_id=group_id,
-                doc_id=final_doc_id,
-            )
-            existing_chunks = list(base.chunks)
-            total_chunk_count = len(existing_chunks)
+        final_doc_id = preparation.final_doc_id
+        active_stage = "chunk_resume"
 
         def _on_event(event: GraphConstructionStreamEvent) -> None:
             if progress_callback is not None:
@@ -194,9 +197,11 @@ class GraphBuilder:
                 stage="fusion",
                 status="processing",
                 payload={
-                    "restored_chunks": len(restored_chunks),
-                    "total_chunks": total_chunk_count,
-                    "previous_status": pipeline_map.get("fusion").status if pipeline_map.get("fusion") is not None else "",
+                    "restored_chunks": len(preparation.restored_chunks),
+                    "total_chunks": preparation.total_chunk_count,
+                    "previous_status": preparation.pipeline_map.get("fusion").status
+                    if preparation.pipeline_map.get("fusion") is not None
+                    else "",
                 },
             )
             active_stage = "fusion"
@@ -207,8 +212,8 @@ class GraphBuilder:
                 group_id=group_id,
                 doc_id=final_doc_id,
                 event_callback=_on_event if (stream_base or progress_callback is not None) else None,
-                existing_chunks=restored_chunks,
-                chunk_texts=[chunk.text for chunk in existing_chunks],
+                existing_chunks=preparation.restored_chunks,
+                chunk_texts=[chunk.text for chunk in preparation.existing_chunks],
                 chunk_result_callback=_on_chunk_result,
             )
             self._upsert_pipeline_checkpoint(
@@ -225,146 +230,14 @@ class GraphBuilder:
                     else 0,
                 },
             )
-            document = self._build_document_record(
+            asset_bundle = self._build_and_save_graph_assets(
+                construction=construction,
                 group_id=group_id,
                 doc_id=final_doc_id,
                 doc_name=doc_name,
                 doc_time=doc_time,
-                original_length=len(text),
-                ingest_stage="graph_built",
-                extra_metadata={
-                    "total_chunks": total_chunk_count or len(construction.chunks),
-                    "graph_checkpoint_completed": sum(1 for chunk in construction.chunks if not chunk.error),
-                    "graph_checkpoint_failed": sum(1 for chunk in construction.chunks if chunk.error),
-                },
-            )
-            chunks = [
-                ChunkRecord(
-                    group_id=group_id,
-                    doc_id=final_doc_id,
-                    chunk_id=c.chunk_id,
-                    index=i,
-                    text=c.text,
-                )
-                for i, c in enumerate(construction.chunks)
-            ]
-            embeddings: List[ChunkEmbeddingRecord] = []
-            active_stage = "doc_graph_assets"
-            self._upsert_pipeline_checkpoint(group_id=group_id, doc_id=final_doc_id, stage=active_stage, status="processing")
-            entities, relations = self._build_doc_level_graph_assets(
-                construction=construction,
-                group_id=group_id,
-                doc_id=final_doc_id,
-            )
-            self._upsert_pipeline_checkpoint(
-                group_id=group_id,
-                doc_id=final_doc_id,
-                stage=active_stage,
-                status="completed",
-                payload={"entities": len(entities), "relations": len(relations)},
-            )
-
-            active_stage = "entity_alignment"
-            self._upsert_pipeline_checkpoint(group_id=group_id, doc_id=final_doc_id, stage=active_stage, status="processing")
-            global_entities, entity_alignments, entities, relations, llm_compare_failed_count = self._align_entities_to_global(
-                group_id=group_id,
-                doc_id=final_doc_id,
-                new_entities=entities,
-                relations=relations,
-            )
-            self._upsert_pipeline_checkpoint(
-                group_id=group_id,
-                doc_id=final_doc_id,
-                stage=active_stage,
-                status="completed",
-                payload={
-                    "global_entities": len(global_entities),
-                    "entity_alignments": len(entity_alignments),
-                    "rewritten_entities": len(entities),
-                    "rewritten_relations": len(relations),
-                    "llm_compare_failed_count": llm_compare_failed_count,
-                },
-            )
-
-            entities = [self._with_entity_id(e) for e in entities]
-            relations = [self._with_relation_id(r) for r in relations]
-            active_stage = "relation_alignment"
-            self._upsert_pipeline_checkpoint(group_id=group_id, doc_id=final_doc_id, stage=active_stage, status="processing")
-            global_relations, relation_alignments = self._align_relations_to_global(
-                group_id=group_id,
-                doc_id=final_doc_id,
-                global_entities=global_entities,
-                relations=relations,
-            )
-            self._upsert_pipeline_checkpoint(
-                group_id=group_id,
-                doc_id=final_doc_id,
-                stage=active_stage,
-                status="completed",
-                payload={
-                    "global_relations": len(global_relations),
-                    "relation_alignments": len(relation_alignments),
-                },
-            )
-
-            active_stage = "mentions"
-            self._upsert_pipeline_checkpoint(group_id=group_id, doc_id=final_doc_id, stage=active_stage, status="processing")
-            entity_mentions, relation_mentions = self._build_mentions(
-                construction=construction,
-                group_id=group_id,
-                doc_id=final_doc_id,
-                entities=entities,
-                global_entities=global_entities,
-                relations=relations,
-                global_relations=global_relations,
-            )
-            self._upsert_pipeline_checkpoint(
-                group_id=group_id,
-                doc_id=final_doc_id,
-                stage=active_stage,
-                status="completed",
-                payload={
-                    "entity_mentions": len(entity_mentions),
-                    "relation_mentions": len(relation_mentions),
-                },
-            )
-
-            active_stage = "graph_index"
-            self._upsert_pipeline_checkpoint(group_id=group_id, doc_id=final_doc_id, stage=active_stage, status="processing")
-            graph_index_records = self._build_graph_index_records(
-                entities=entities,
-                relations=relations,
-                global_entities=global_entities,
-                global_relations=global_relations,
-            )
-            self._upsert_pipeline_checkpoint(
-                group_id=group_id,
-                doc_id=final_doc_id,
-                stage=active_stage,
-                status="completed",
-                payload={"graph_index_records": len(graph_index_records)},
-            )
-
-            active_stage = "save_graph_assets"
-            self._upsert_pipeline_checkpoint(group_id=group_id, doc_id=final_doc_id, stage=active_stage, status="processing")
-            self._storage.save_graph_assets(
-                document=document,
-                entities=entities,
-                relations=relations,
-                entity_mentions=entity_mentions,
-                relation_mentions=relation_mentions,
-                global_entities=global_entities,
-                entity_alignments=entity_alignments,
-                global_relations=global_relations,
-                relation_alignments=relation_alignments,
-                graph_index_records=graph_index_records,
-            )
-            self._upsert_pipeline_checkpoint(
-                group_id=group_id,
-                doc_id=final_doc_id,
-                stage=active_stage,
-                status="completed",
-                payload={"saved": True},
+                original_text=text,
+                total_chunk_count=preparation.total_chunk_count,
             )
         except Exception as exc:
             self._upsert_pipeline_checkpoint(
@@ -379,17 +252,17 @@ class GraphBuilder:
 
         return GraphBuildResult(
             construction=construction,
-            document=document,
-            chunks=chunks,
-            embeddings=embeddings,
-            entities=entities,
-            relations=relations,
-            entity_mentions=entity_mentions,
-            relation_mentions=relation_mentions,
-            global_entities=global_entities,
-            entity_alignments=entity_alignments,
-            global_relations=global_relations,
-            relation_alignments=relation_alignments,
+            document=asset_bundle.document,
+            chunks=asset_bundle.chunks,
+            embeddings=asset_bundle.embeddings,
+            entities=asset_bundle.entities,
+            relations=asset_bundle.relations,
+            entity_mentions=asset_bundle.entity_mentions,
+            relation_mentions=asset_bundle.relation_mentions,
+            global_entities=asset_bundle.global_entities,
+            entity_alignments=asset_bundle.entity_alignments,
+            global_relations=asset_bundle.global_relations,
+            relation_alignments=asset_bundle.relation_alignments,
         )
 
     def build_and_save(
@@ -408,6 +281,144 @@ class GraphBuilder:
             group_id=group_id,
             doc_id=doc_id,
             stream_base=True,
+        )
+
+    def _prepare_graph_build(
+        self,
+        *,
+        text: str,
+        doc_time: str,
+        doc_name: str,
+        group_id: str,
+        doc_id: Optional[str],
+    ) -> GraphBuildPreparation:
+        final_doc_id = str(doc_id or uuid4().hex)
+        existing_chunks = list(self._storage.list_doc_chunks(group_id=group_id, doc_id=final_doc_id, limit=200000))
+        checkpoint_rows = list(self._storage.list_graph_chunk_checkpoints(group_id=group_id, doc_id=final_doc_id))
+        pipeline_rows = list(self._storage.list_graph_pipeline_checkpoints(group_id=group_id, doc_id=final_doc_id))
+        restored_chunks = self._restore_completed_chunks(
+            checkpoints=checkpoint_rows,
+            group_id=group_id,
+            doc_id=final_doc_id,
+            chunks=existing_chunks,
+        )
+        total_chunk_count = len(existing_chunks)
+        if not existing_chunks:
+            base = self.build_base_and_save(
+                text=text,
+                doc_time=doc_time,
+                doc_name=doc_name,
+                group_id=group_id,
+                doc_id=final_doc_id,
+            )
+            existing_chunks = list(base.chunks)
+            total_chunk_count = len(existing_chunks)
+        return GraphBuildPreparation(
+            final_doc_id=final_doc_id,
+            existing_chunks=existing_chunks,
+            restored_chunks=restored_chunks,
+            pipeline_map={row.stage: row for row in pipeline_rows},
+            total_chunk_count=total_chunk_count,
+        )
+
+    def _build_and_save_graph_assets(
+        self,
+        *,
+        construction: GraphConstructionResult,
+        group_id: str,
+        doc_id: str,
+        doc_name: str,
+        doc_time: str,
+        original_text: str,
+        total_chunk_count: int,
+    ) -> GraphAssetBundle:
+        document = self._build_document_record(
+            group_id=group_id,
+            doc_id=doc_id,
+            doc_name=doc_name,
+            doc_time=doc_time,
+            original_length=len(original_text),
+            ingest_stage="graph_built",
+            extra_metadata={
+                "total_chunks": total_chunk_count or len(construction.chunks),
+                "graph_checkpoint_completed": sum(1 for chunk in construction.chunks if not chunk.error),
+                "graph_checkpoint_failed": sum(1 for chunk in construction.chunks if chunk.error),
+            },
+        )
+        chunks = [
+            ChunkRecord(
+                group_id=group_id,
+                doc_id=doc_id,
+                chunk_id=chunk.chunk_id,
+                index=index,
+                text=chunk.text,
+            )
+            for index, chunk in enumerate(construction.chunks)
+        ]
+        embeddings: List[ChunkEmbeddingRecord] = []
+
+        entities, relations = self._run_doc_graph_asset_stage(
+            construction=construction,
+            group_id=group_id,
+            doc_id=doc_id,
+        )
+        global_entities, entity_alignments, entities, relations = self._run_entity_alignment_stage(
+            group_id=group_id,
+            doc_id=doc_id,
+            entities=entities,
+            relations=relations,
+        )
+        entities = [self._with_entity_id(entity) for entity in entities]
+        relations = [self._with_relation_id(relation) for relation in relations]
+        global_relations, relation_alignments = self._run_relation_alignment_stage(
+            group_id=group_id,
+            doc_id=doc_id,
+            global_entities=global_entities,
+            relations=relations,
+        )
+        entity_mentions, relation_mentions = self._run_mentions_stage(
+            construction=construction,
+            group_id=group_id,
+            doc_id=doc_id,
+            entities=entities,
+            global_entities=global_entities,
+            relations=relations,
+            global_relations=global_relations,
+        )
+        graph_index_records = self._run_graph_index_stage(
+            group_id=group_id,
+            doc_id=doc_id,
+            entities=entities,
+            relations=relations,
+            global_entities=global_entities,
+            global_relations=global_relations,
+        )
+        self._run_save_graph_assets_stage(
+            group_id=group_id,
+            doc_id=doc_id,
+            document=document,
+            entities=entities,
+            relations=relations,
+            entity_mentions=entity_mentions,
+            relation_mentions=relation_mentions,
+            global_entities=global_entities,
+            entity_alignments=entity_alignments,
+            global_relations=global_relations,
+            relation_alignments=relation_alignments,
+            graph_index_records=graph_index_records,
+        )
+        return GraphAssetBundle(
+            document=document,
+            chunks=chunks,
+            embeddings=embeddings,
+            entities=entities,
+            relations=relations,
+            entity_mentions=entity_mentions,
+            relation_mentions=relation_mentions,
+            global_entities=global_entities,
+            entity_alignments=entity_alignments,
+            global_relations=global_relations,
+            relation_alignments=relation_alignments,
         )
 
     def retry_single_chunk(
@@ -516,6 +527,194 @@ class GraphBuilder:
             parsed_json=self._serialize_parsed(parsed_chunk.parsed) if parsed_chunk is not None else {},
             error=str(error or ""),
             updated_at=self._now(),
+        )
+
+    def _run_doc_graph_asset_stage(
+        self,
+        *,
+        construction: GraphConstructionResult,
+        group_id: str,
+        doc_id: str,
+    ) -> tuple[List[GraphEntityRecord], List[GraphRelationRecord]]:
+        stage = "doc_graph_assets"
+        self._upsert_pipeline_checkpoint(group_id=group_id, doc_id=doc_id, stage=stage, status="processing")
+        entities, relations = self._build_doc_level_graph_assets(
+            construction=construction,
+            group_id=group_id,
+            doc_id=doc_id,
+        )
+        self._upsert_pipeline_checkpoint(
+            group_id=group_id,
+            doc_id=doc_id,
+            stage=stage,
+            status="completed",
+            payload={"entities": len(entities), "relations": len(relations)},
+        )
+        return entities, relations
+
+    def _run_entity_alignment_stage(
+        self,
+        *,
+        group_id: str,
+        doc_id: str,
+        entities: Sequence[GraphEntityRecord],
+        relations: Sequence[GraphRelationRecord],
+    ) -> tuple[
+        List[GlobalEntityRecord],
+        List[EntityAlignmentRecord],
+        List[GraphEntityRecord],
+        List[GraphRelationRecord],
+    ]:
+        stage = "entity_alignment"
+        self._upsert_pipeline_checkpoint(group_id=group_id, doc_id=doc_id, stage=stage, status="processing")
+        global_entities, entity_alignments, rewritten_entities, rewritten_relations, llm_compare_failed_count = (
+            self._align_entities_to_global(
+                group_id=group_id,
+                doc_id=doc_id,
+                new_entities=entities,
+                relations=relations,
+            )
+        )
+        self._upsert_pipeline_checkpoint(
+            group_id=group_id,
+            doc_id=doc_id,
+            stage=stage,
+            status="completed",
+            payload={
+                "global_entities": len(global_entities),
+                "entity_alignments": len(entity_alignments),
+                "rewritten_entities": len(rewritten_entities),
+                "rewritten_relations": len(rewritten_relations),
+                "llm_compare_failed_count": llm_compare_failed_count,
+            },
+        )
+        return global_entities, entity_alignments, rewritten_entities, rewritten_relations
+
+    def _run_relation_alignment_stage(
+        self,
+        *,
+        group_id: str,
+        doc_id: str,
+        global_entities: Sequence[GlobalEntityRecord],
+        relations: Sequence[GraphRelationRecord],
+    ) -> tuple[List[GlobalRelationRecord], List[RelationAlignmentRecord]]:
+        stage = "relation_alignment"
+        self._upsert_pipeline_checkpoint(group_id=group_id, doc_id=doc_id, stage=stage, status="processing")
+        global_relations, relation_alignments = self._align_relations_to_global(
+            group_id=group_id,
+            doc_id=doc_id,
+            global_entities=global_entities,
+            relations=relations,
+        )
+        self._upsert_pipeline_checkpoint(
+            group_id=group_id,
+            doc_id=doc_id,
+            stage=stage,
+            status="completed",
+            payload={
+                "global_relations": len(global_relations),
+                "relation_alignments": len(relation_alignments),
+            },
+        )
+        return global_relations, relation_alignments
+
+    def _run_mentions_stage(
+        self,
+        *,
+        construction: GraphConstructionResult,
+        group_id: str,
+        doc_id: str,
+        entities: Sequence[GraphEntityRecord],
+        global_entities: Sequence[GlobalEntityRecord],
+        relations: Sequence[GraphRelationRecord],
+        global_relations: Sequence[GlobalRelationRecord],
+    ) -> tuple[List[EntityMentionRecord], List[RelationMentionRecord]]:
+        stage = "mentions"
+        self._upsert_pipeline_checkpoint(group_id=group_id, doc_id=doc_id, stage=stage, status="processing")
+        entity_mentions, relation_mentions = self._build_mentions(
+            construction=construction,
+            group_id=group_id,
+            doc_id=doc_id,
+            entities=entities,
+            global_entities=global_entities,
+            relations=relations,
+            global_relations=global_relations,
+        )
+        self._upsert_pipeline_checkpoint(
+            group_id=group_id,
+            doc_id=doc_id,
+            stage=stage,
+            status="completed",
+            payload={
+                "entity_mentions": len(entity_mentions),
+                "relation_mentions": len(relation_mentions),
+            },
+        )
+        return entity_mentions, relation_mentions
+
+    def _run_graph_index_stage(
+        self,
+        *,
+        group_id: str,
+        doc_id: str,
+        entities: Sequence[GraphEntityRecord],
+        relations: Sequence[GraphRelationRecord],
+        global_entities: Sequence[GlobalEntityRecord],
+        global_relations: Sequence[GlobalRelationRecord],
+    ) -> List[GraphIndexRecord]:
+        stage = "graph_index"
+        self._upsert_pipeline_checkpoint(group_id=group_id, doc_id=doc_id, stage=stage, status="processing")
+        graph_index_records = self._build_graph_index_records(
+            entities=entities,
+            relations=relations,
+            global_entities=global_entities,
+            global_relations=global_relations,
+        )
+        self._upsert_pipeline_checkpoint(
+            group_id=group_id,
+            doc_id=doc_id,
+            stage=stage,
+            status="completed",
+            payload={"graph_index_records": len(graph_index_records)},
+        )
+        return graph_index_records
+
+    def _run_save_graph_assets_stage(
+        self,
+        *,
+        group_id: str,
+        doc_id: str,
+        document: DocumentRecord,
+        entities: Sequence[GraphEntityRecord],
+        relations: Sequence[GraphRelationRecord],
+        entity_mentions: Sequence[EntityMentionRecord],
+        relation_mentions: Sequence[RelationMentionRecord],
+        global_entities: Sequence[GlobalEntityRecord],
+        entity_alignments: Sequence[EntityAlignmentRecord],
+        global_relations: Sequence[GlobalRelationRecord],
+        relation_alignments: Sequence[RelationAlignmentRecord],
+        graph_index_records: Sequence[GraphIndexRecord],
+    ) -> None:
+        stage = "save_graph_assets"
+        self._upsert_pipeline_checkpoint(group_id=group_id, doc_id=doc_id, stage=stage, status="processing")
+        self._storage.save_graph_assets(
+            document=document,
+            entities=entities,
+            relations=relations,
+            entity_mentions=entity_mentions,
+            relation_mentions=relation_mentions,
+            global_entities=global_entities,
+            entity_alignments=entity_alignments,
+            global_relations=global_relations,
+            relation_alignments=relation_alignments,
+            graph_index_records=graph_index_records,
+        )
+        self._upsert_pipeline_checkpoint(
+            group_id=group_id,
+            doc_id=doc_id,
+            stage=stage,
+            status="completed",
+            payload={"saved": True},
         )
 
     @staticmethod
