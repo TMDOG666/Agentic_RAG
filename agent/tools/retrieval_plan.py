@@ -25,6 +25,8 @@ ALLOWED_MODES = {
     "entities_by_relations",
 }
 
+MAX_COMPACT_TEXT_CHARS = 320
+
 
 def _start_invocation(
     *,
@@ -239,6 +241,58 @@ def dedupe_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         deduped.append(item)
 
     return deduped
+
+
+def _compact_text(text: str, *, limit: int = MAX_COMPACT_TEXT_CHARS) -> str:
+    content = " ".join(str(text or "").split())
+    if len(content) <= limit:
+        return content
+    return f"{content[: max(0, limit - 1)].rstrip()}…"
+
+
+def build_compact_item(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "type": item.get("type"),
+        "document_name": item.get("document_name"),
+        "doc_id": item.get("doc_id"),
+        "chunk_id": item.get("chunk_id"),
+        "entity_name": item.get("entity_name"),
+        "relation": item.get("relation"),
+        "score": item.get("score"),
+        "mode": item.get("mode"),
+        "label": item.get("label"),
+        "text": _compact_text(str(item.get("text") or "")),
+    }
+
+
+def build_compact_result(
+    result: dict[str, Any],
+    *,
+    max_items: int = 5,
+    include_steps: bool = True,
+) -> dict[str, Any]:
+    steps = []
+    if include_steps:
+        for step in result.get("steps") or []:
+            steps.append(
+                {
+                    "step": step.get("step"),
+                    "label": step.get("label"),
+                    "mode": step.get("mode"),
+                    "query": step.get("query"),
+                    "raw_count": step.get("raw_count"),
+                }
+            )
+
+    return {
+        "result_id": result.get("result_id"),
+        "query": result.get("query"),
+        "group_id": result.get("group_id"),
+        "doc_id": result.get("doc_id"),
+        "steps": steps,
+        "items": [build_compact_item(item) for item in (result.get("items") or [])[: max_items]],
+        "errors": result.get("errors") or [],
+    }
 
 
 def _to_csv(values: Any) -> str:
@@ -471,6 +525,7 @@ def execute_retrieval_plan(
     deduped_items = dedupe_items(merged_items)
     return_limit = int(plan.get("return_limit", 12))
     result = {
+        "result_id": uuid.uuid4().hex,
         "query": effective_query,
         "group_id": effective_group_id,
         "doc_id": effective_doc_id or None,

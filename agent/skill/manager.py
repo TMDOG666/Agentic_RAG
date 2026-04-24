@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fnmatch
 import os
+import re
 import shlex
 import subprocess
 import uuid
@@ -138,6 +139,47 @@ class SkillManager:
     def _build_error_result(message: str) -> dict[str, Any]:
         return {"ok": False, "message": str(message or "")}
 
+    @staticmethod
+    def _strip_frontmatter(content: str) -> str:
+        text = str(content or "")
+        if not text.startswith("---"):
+            return text.strip()
+        parts = text.split("---", 2)
+        if len(parts) >= 3:
+            return parts[2].strip()
+        return text.strip()
+
+    @staticmethod
+    def _build_compact_prompt(content: str, *, max_chars: int = 1400, max_lines: int = 18) -> str:
+        stripped = SkillManager._strip_frontmatter(content)
+        lines = [line.strip() for line in stripped.splitlines() if line.strip()]
+        selected: list[str] = []
+        seen: set[str] = set()
+
+        for line in lines:
+            normalized = re.sub(r"\s+", " ", line)
+            if normalized in seen:
+                continue
+            if (
+                normalized.startswith("#")
+                or normalized.startswith("- ")
+                or normalized.startswith("* ")
+                or re.match(r"^\d+\.", normalized)
+                or "`" in normalized
+            ):
+                selected.append(normalized)
+                seen.add(normalized)
+                if len(selected) >= max_lines:
+                    break
+
+        if not selected:
+            selected = lines[:max_lines]
+
+        compact = "\n".join(selected).strip()
+        if len(compact) <= max_chars:
+            return compact
+        return f"{compact[: max(0, max_chars - 1)].rstrip()}…"
+
     def _start_invocation(
         self,
         *,
@@ -205,6 +247,9 @@ class SkillManager:
         skill_md_mtime_ns, skill_md_size = self._safe_stat(skill_file)
         manifest_mtime_ns, manifest_size = self._safe_stat(manifest_file)
         prompt_entry = manifest.entrypoints.prompt.path if manifest.entrypoints.prompt else None
+        compact_prompt = ""
+        if skill_file and skill_file.exists():
+            compact_prompt = self._build_compact_prompt(skill_file.read_text(encoding="utf-8"))
 
         return {
             "name": manifest.name,
@@ -224,6 +269,7 @@ class SkillManager:
             "runtime": manifest.runtime.model_dump(mode="python"),
             "compatibility": manifest.compatibility.model_dump(mode="python"),
             "manifest": manifest.model_dump(mode="python"),
+            "compact_prompt": compact_prompt,
             "skill_md_mtime_ns": skill_md_mtime_ns,
             "skill_md_size": skill_md_size,
             "manifest_mtime_ns": manifest_mtime_ns,
@@ -281,6 +327,8 @@ class SkillManager:
                 cached["path"] = skill_dir
                 cached["manifest_file"] = manifest_file if manifest_file.exists() else None
                 cached["skill_file"] = skill_file if skill_file.exists() else None
+                if not cached.get("compact_prompt") and skill_file.exists():
+                    cached["compact_prompt"] = self._build_compact_prompt(skill_file.read_text(encoding="utf-8"))
                 self.skills_metadata[skill_dir.name] = cached
                 discovered_names.add(skill_dir.name)
                 self._finish_invocation(
@@ -392,10 +440,7 @@ class SkillManager:
 
         try:
             content = prompt_file.read_text(encoding="utf-8")
-            if content.startswith("---"):
-                parts = content.split("---", 2)
-                if len(parts) >= 3:
-                    content = parts[2].strip()
+            compact_content = self.skills_metadata[skill_name].get("compact_prompt") or self._build_compact_prompt(content)
             self._finish_invocation(
                 invocation_id,
                 status="completed",
@@ -403,10 +448,11 @@ class SkillManager:
                     "skill_name": skill_name,
                     "prompt_file": str(prompt_file),
                     "content_chars": len(content),
-                    "content_preview": content[:500],
+                    "compact_chars": len(compact_content),
+                    "content_preview": compact_content[:500],
                 },
             )
-            return content
+            return compact_content
         except Exception as exc:
             message = f"❌ 加载技能失败: {exc}"
             self._finish_invocation(invocation_id, error=exc)

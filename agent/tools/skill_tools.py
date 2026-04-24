@@ -1,7 +1,4 @@
-"""SkillManager 的 tool 暴露层。
-
-这里只负责把底层能力包装成 Agent 可调用的工具，并补齐统一的 trace / invocation 记录。
-"""
+"""SkillManager tool exposure layer with compact tool outputs."""
 
 from __future__ import annotations
 
@@ -11,12 +8,15 @@ import uuid
 from langchain_core.tools import tool
 
 from agent.telemetry import emit_event
-from agent.tools.retrieval_plan import execute_retrieval_plan, get_plan_schema
+from agent.tools.result_store import get_result_store
+from agent.tools.retrieval_plan import build_compact_result, execute_retrieval_plan, get_plan_schema
 from grag.observability import get_current_trace_recorder
 
 
 def create_tools(skill_manager):
-    """基于 SkillManager 创建一组可供 Agent 调用的 tools。"""
+    """Create a set of tools exposed to the Agent."""
+
+    result_store = get_result_store()
 
     def start_tool_invocation(tool_name: str, input_payload: dict) -> str | None:
         recorder = get_current_trace_recorder()
@@ -60,7 +60,7 @@ def create_tools(skill_manager):
 
     @tool
     def load_skill(skill_name: str) -> str:
-        """加载某个 skill 的正文说明。"""
+        """Load the compact prompt summary of a skill."""
         print(f"[tool] load_skill: {skill_name}")
         invocation_id = start_tool_invocation("load_skill", {"skill_name": skill_name})
         emit_event("skill.load.start", {"skill_name": skill_name})
@@ -81,7 +81,7 @@ def create_tools(skill_manager):
 
     @tool
     def read_skill_file(skill_name: str, filename: str) -> str:
-        """读取某个 skill 目录下的引用文件。"""
+        """Read a referenced file inside a skill directory."""
         print(f"[tool] read_skill_file: {skill_name}/{filename}")
         invocation_id = start_tool_invocation(
             "read_skill_file",
@@ -115,7 +115,7 @@ def create_tools(skill_manager):
         script_args: str = "",
         **kwargs,
     ) -> str:
-        """执行某个 skill 下的脚本。"""
+        """Execute a declared script inside a skill."""
         v_args = kwargs.get("v__args", "")
         effective_args = args or script_args or v_args
         print(f"[tool] execute_skill_script: {skill_name}/{script_name} {effective_args}")
@@ -157,7 +157,7 @@ def create_tools(skill_manager):
 
     @tool
     def get_retrieval_plan_schema() -> str:
-        """返回检索计划模块的 JSON schema。"""
+        """Return the JSON schema of the retrieval plan module."""
         invocation_id = start_tool_invocation("get_retrieval_plan_schema", {})
         emit_event("tool.start", {"tool_name": "get_retrieval_plan_schema"})
         try:
@@ -179,13 +179,44 @@ def create_tools(skill_manager):
             raise
 
     @tool
+    def get_retrieval_result(result_id: str, max_items: int = 5) -> str:
+        """Fetch the compact view of a previous retrieval result by result_id."""
+        invocation_id = start_tool_invocation(
+            "get_retrieval_result",
+            {"result_id": result_id, "max_items": max_items},
+        )
+        try:
+            result = result_store.get(str(result_id or "").strip())
+            if not isinstance(result, dict):
+                finish_tool_invocation(
+                    invocation_id,
+                    output_payload={"found": False, "result_id": result_id},
+                )
+                return f"retrieval result not found: {result_id}"
+
+            compact = build_compact_result(result, max_items=max(1, int(max_items)))
+            content = json.dumps(compact, ensure_ascii=False)
+            finish_tool_invocation(
+                invocation_id,
+                output_payload={
+                    "found": True,
+                    "result_id": compact.get("result_id"),
+                    "items": len(compact.get("items") or []),
+                },
+            )
+            return content
+        except Exception as exc:
+            finish_tool_invocation(invocation_id, error=exc)
+            raise
+
+    @tool
     def run_retrieval_plan(
         query: str,
         plan_json: str,
         group_id: str = "",
         doc_id: str = "",
     ) -> str:
-        """执行检索计划，并返回统一的证据结果。"""
+        """Execute a retrieval plan and return a compact evidence view."""
         invocation_id = start_tool_invocation(
             "run_retrieval_plan",
             {
@@ -212,7 +243,9 @@ def create_tools(skill_manager):
                 group_id=group_id,
                 doc_id=doc_id,
             )
-            content = json.dumps(result, ensure_ascii=False)
+            result_store.put(str(result.get("result_id") or ""), result)
+            compact = build_compact_result(result)
+            content = json.dumps(compact, ensure_ascii=False)
             emit_event(
                 "tool.end",
                 {
@@ -220,7 +253,8 @@ def create_tools(skill_manager):
                     "steps": len(result.get("steps") or []),
                     "items": len(result.get("items") or []),
                     "errors": len(result.get("errors") or []),
-                    "items_preview": (result.get("items") or [])[:8],
+                    "items_preview": (compact.get("items") or [])[:5],
+                    "result_id": result.get("result_id"),
                 },
             )
             finish_tool_invocation(
@@ -229,7 +263,8 @@ def create_tools(skill_manager):
                     "steps": len(result.get("steps") or []),
                     "items": len(result.get("items") or []),
                     "errors": len(result.get("errors") or []),
-                    "items_preview": (result.get("items") or [])[:8],
+                    "items_preview": (compact.get("items") or [])[:5],
+                    "result_id": result.get("result_id"),
                 },
             )
             return content
@@ -249,5 +284,6 @@ def create_tools(skill_manager):
         read_skill_file,
         execute_skill_script,
         get_retrieval_plan_schema,
+        get_retrieval_result,
         run_retrieval_plan,
     ]
